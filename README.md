@@ -6,7 +6,7 @@
 
 Run a multi-step process to completion. When the machine crashes halfway through and restarts hours later, resume from where it left off instead of starting over.
 
-[![Go Reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/you/rerun)
+[![Go Reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/sylvester-francis/rerun)
 [![Go Version](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![Tests](https://img.shields.io/badge/go%20test-race-44cc11)](#testing)
 [![Core deps](https://img.shields.io/badge/core%20deps-0-success)](#design)
@@ -64,7 +64,7 @@ Recovery is just *running the function again*. Steps that completed before the c
 ## Install
 
 ```sh
-go get github.com/you/rerun
+go get github.com/sylvester-francis/rerun
 ```
 
 Requires Go 1.21+ (generics power the type-safe `Do[T]`).
@@ -78,8 +78,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/you/rerun"
-	"github.com/you/rerun/sqlite"
+	"github.com/sylvester-francis/rerun"
+	"github.com/sylvester-francis/rerun/sqlite"
 )
 
 func main() {
