@@ -1,10 +1,17 @@
 <div align="center">
 
-# rerun
+<pre>
+██████╗ ███████╗██████╗ ██╗   ██╗███╗   ██╗
+██╔══██╗██╔════╝██╔══██╗██║   ██║████╗  ██║
+██████╔╝█████╗  ██████╔╝██║   ██║██╔██╗ ██║
+██╔══██╗██╔══╝  ██╔══██╗██║   ██║██║╚██╗██║
+██║  ██║███████╗██║  ██║╚██████╔╝██║ ╚████║
+╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+</pre>
 
-**Durable execution for Go, in a few hundred lines.**
+### ⟲ durable execution for Go &nbsp;·&nbsp; crash · restart · resume
 
-Run a multi-step process to completion. When the machine crashes halfway through and restarts hours later, resume from where it left off instead of starting over.
+**A multi-step process that runs to completion — even when the machine crashes halfway through and restarts hours later. It resumes from where it left off instead of starting over.**
 
 [![Go Reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/sylvester-francis/rerun)
 [![Go Version](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
