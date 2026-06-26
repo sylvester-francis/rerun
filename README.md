@@ -64,11 +64,6 @@ flowchart TD
     E --> F[Notify observer]
     C --> G([Advance to next step])
     F --> G
-
-    classDef replay fill:#0b2530,stroke:#00ADD8,color:#cdeefb;
-    classDef live fill:#0b1f12,stroke:#28c840,color:#cdf5d5;
-    class C replay;
-    class D,E,F live;
 ```
 
 Recovery is just *running the function again*. Steps that completed before the crash replay instantly from the journal; the first step without an entry executes for real; everything after it runs forward normally. The function is written once, as if crashes didn't exist, and the engine makes it crash-proof by recording and replaying.
@@ -87,11 +82,10 @@ flowchart LR
       direction LR
       s0["seq 0<br/>create-account<br/>✓ acct_1"]
       s1["seq 1<br/>charge<br/>✓ txn_2"]
-      s2["seq 2<br/>·"]:::empty
+      s2["seq 2<br/>·"]
     end
     s0 --> s1 --> s2
     cursor(["▲ cursor — replay up to here,<br/>then run live from here on"]) -.-> s2
-    classDef empty fill:#0d1117,stroke:#3a4a5a,stroke-dasharray:4,color:#5b6b7d;
 ```
 
 **2 · A crash just rewinds the tape; replay fast-forwards it.** Restarting re-runs the function from the top, but completed steps return instantly from the journal — no card re-charged, no email re-sent — until execution reaches the first step the crash never recorded.
@@ -271,11 +265,6 @@ flowchart TD
     Codec -.->|default| JSON["jsonCodec"]
     Clock -.->|default| Wall["wall clock"]
     Observer -.->|default| Noop["no-op"]
-
-    classDef iface fill:#0b2530,stroke:#00ADD8,color:#cdeefb;
-    classDef impl fill:#15171c,stroke:#5b6b7d,color:#c7d6e3;
-    class Store,Codec,Clock,Observer iface;
-    class SQLite,Mem,PG,JSON,Wall,Noop impl;
 ```
 
 > Arrows are dependencies. Nothing inside `Core` points outward at a concrete implementation — adapters depend on the interfaces, never the reverse. Adding a Postgres backend, a protobuf codec, or a metrics observer never touches engine source.
