@@ -10,7 +10,7 @@ Run a multi-step process to completion. When the machine crashes halfway through
 [![Go Version](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![Tests](https://img.shields.io/badge/go%20test-race-44cc11)](#testing)
 [![Core deps](https://img.shields.io/badge/core%20deps-0-success)](#design)
-[![License](https://img.shields.io/badge/license-choose%20one-lightgrey)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 `Do` · `Sleep` · `Recover` — that's the whole API.
 
@@ -270,4 +270,4 @@ The core engine is single-process. Beyond it lie the hard problems of distribute
 
 ## License
 
-Choose one deliberately — MIT or Apache-2.0 is the honest default for a library you want adopted. See [LICENSE](LICENSE).
+[MIT](LICENSE) © 2026 Sylvester Francis
