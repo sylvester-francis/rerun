@@ -53,20 +53,83 @@ If the process dies after `charge` but before `receipt`, the next boot's `Recove
 
 ## How it works
 
-A workflow is an ordinary Go function. Each step is wrapped in `Do`, which does one of two things:
+A workflow is an ordinary Go function. Each step is wrapped in `Do`, which makes a single decision — *have I already done this?*
 
-```
-  first run                          replay after a crash
-  ─────────                          ────────────────────
-  execute the work          ┌──►     journal entry exists for this tag?
-  write result to journal   │        ├─ yes → return the stored result, skip the work
-  return                    │        └─ no  → execute live, journal it, continue forward
-                            └─────────────────────────────────────────────────────────
+```mermaid
+flowchart TD
+    A(["Do(w, tag, fn)"]) --> B{Replaying<br/>and a journal entry<br/>exists for this tag?}
+    B -->|yes| C[Return the journaled result<br/>skip the work entirely]
+    B -->|no| D[Execute fn live]
+    D --> E[Marshal &amp; append result<br/>to the journal]
+    E --> F[Notify observer]
+    C --> G([Advance to next step])
+    F --> G
+
+    classDef replay fill:#0b2530,stroke:#00ADD8,color:#cdeefb;
+    classDef live fill:#0b1f12,stroke:#28c840,color:#cdf5d5;
+    class C replay;
+    class D,E,F live;
 ```
 
 Recovery is just *running the function again*. Steps that completed before the crash replay instantly from the journal; the first step without an entry executes for real; everything after it runs forward normally. The function is written once, as if crashes didn't exist, and the engine makes it crash-proof by recording and replaying.
 
 > **The thing you persist is not _which step you reached_, but _the result every completed step produced_.** With the results in hand, recovery isn't guesswork.
+
+## Mental models
+
+Four ways to hold the idea in your head. Pick whichever one sticks.
+
+**1 · The journal is the source of truth, the code is a cursor.** Your function isn't the state — the journal is. The function is just a pointer that walks the journal forward, executing only past its end.
+
+```mermaid
+flowchart LR
+    subgraph J["Journal (durable)"]
+      direction LR
+      s0["seq 0<br/>create-account<br/>✓ acct_1"]
+      s1["seq 1<br/>charge<br/>✓ txn_2"]
+      s2["seq 2<br/>·"]:::empty
+    end
+    s0 --> s1 --> s2
+    cursor(["▲ cursor — replay up to here,<br/>then run live from here on"]) -.-> s2
+    classDef empty fill:#0d1117,stroke:#3a4a5a,stroke-dasharray:4,color:#5b6b7d;
+```
+
+**2 · A crash just rewinds the tape; replay fast-forwards it.** Restarting re-runs the function from the top, but completed steps return instantly from the journal — no card re-charged, no email re-sent — until execution reaches the first step the crash never recorded.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Workflow fn
+    participant E as Engine
+    participant J as Journal
+    Note over W,J: First run
+    W->>E: Do("charge")
+    E->>J: append txn_2
+    W--xE: 💥 crash before "receipt"
+    Note over W,J: Recover() → run the same fn again
+    W->>E: Do("charge")
+    E->>J: entry exists → return txn_2 (no live charge)
+    W->>E: Do("receipt")
+    E->>J: no entry → execute live, append, finish ✓
+```
+
+**3 · `Do` is the membrane between two worlds.** Inside a `Do`, the messy non-deterministic world — clocks, randomness, network — runs once and gets frozen into the journal. Outside, the workflow body must be a deterministic skeleton, replayable byte-for-byte.
+
+```mermaid
+flowchart LR
+    subgraph D["Deterministic skeleton (replayable)"]
+      direction TB
+      ctrl["control flow<br/>step order &amp; tags"]
+    end
+    subgraph N["Non-deterministic world"]
+      direction TB
+      io["time · random · network · I/O"]
+    end
+    ctrl -- "Do(tag, fn)" --> io
+    io -- "result journaled once" --> ctrl
+```
+
+**4 · One goroutine per run, parked for free.** Each run drives a plain top-to-bottom function on its own goroutine. A `Sleep` or a slow step just blocks that goroutine cheaply, so thousands of long-lived workflows sit idle at once without a thread each.
 
 ## Install
 
@@ -185,13 +248,37 @@ On replay the whole attempt sequence is reproduced from the journal without call
 
 ## Design
 
+Dependencies point one way only — inward, toward abstractions. The engine knows nothing about SQLite; SQLite knows nothing about the engine. Both meet at the `Store` interface.
+
+```mermaid
+flowchart TD
+    User["Your workflow code"] --> Engine
+
+    subgraph Core["rerun — engine + interfaces (zero third-party deps)"]
+      direction TB
+      Engine["Engine<br/><i>orchestrates runs</i>"]
+      W["W<br/><i>replays the journal</i>"]
+      Engine --> W
+      Engine -. "uses" .-> Store([Store])
+      Engine -. "uses" .-> Codec([Codec])
+      Engine -. "uses" .-> Clock([Clock])
+      Engine -. "uses" .-> Observer([Observer])
+    end
+
+    Store -.->|implemented by| SQLite["sqlite<br/><i>pure-Go, persistent</i>"]
+    Store -.->|implemented by| Mem["internal/memstore<br/><i>in-memory default</i>"]
+    Store -.->|implemented by| PG["your backend<br/><i>Postgres, …</i>"]
+    Codec -.->|default| JSON["jsonCodec"]
+    Clock -.->|default| Wall["wall clock"]
+    Observer -.->|default| Noop["no-op"]
+
+    classDef iface fill:#0b2530,stroke:#00ADD8,color:#cdeefb;
+    classDef impl fill:#15171c,stroke:#5b6b7d,color:#c7d6e3;
+    class Store,Codec,Clock,Observer iface;
+    class SQLite,Mem,PG,JSON,Wall,Noop impl;
 ```
-Consumer code
-    ↓ depends on
-  rerun (interfaces + engine)
-    ↓ depends on
-  nothing
-```
+
+> Arrows are dependencies. Nothing inside `Core` points outward at a concrete implementation — adapters depend on the interfaces, never the reverse. Adding a Postgres backend, a protobuf codec, or a metrics observer never touches engine source.
 
 Backends and extensions never import the engine; the engine imports no adapter. Each piece changes for exactly one reason:
 
@@ -230,6 +317,22 @@ e := rerun.New(store,
 	rerun.WithClock(myClock),
 	rerun.WithObserver(myObserver),
 )
+```
+
+### Run lifecycle
+
+Every run moves through four states. `Recover` re-launches exactly those left in `Running` or `Pending` when the process died.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Start()
+    Pending --> Running: exec acquires lock
+    Running --> Done: workflow returns nil
+    Running --> Failed: workflow returns error
+    Running --> Running: 💥 crash + Recover()
+    Pending --> Pending: 💥 crash + Recover()
+    Done --> [*]
+    Failed --> [*]
 ```
 
 ## When it panics vs. returns an error
