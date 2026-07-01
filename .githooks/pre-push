@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# rerun pre-push gate — blocks pushing incomplete or broken tutorial work.
+#
+# Install (once, per clone):  git config core.hooksPath .githooks
+# Uninstall:                  git config --unset core.hooksPath
+# Bypass a single push:       git push --no-verify
+# Skip the gate:              RERUN_GATE=off git push
+# Strict (warnings block too): RERUN_GATE=strict git push
+#
+# When this blocks a push it names the failing gate. Run the
+# rerun-tutorial-validator skill for the teaching on how to fix it.
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+gate="$root/.claude/skills/rerun-tutorial-validator/scripts/gate.sh"
+
+if [ ! -f "$gate" ]; then
+  echo "rerun pre-push: gate script not found ($gate) — skipping."
+  exit 0
+fi
+
+echo "rerun pre-push: validating tutorial completeness…"
+exec bash "$gate"
