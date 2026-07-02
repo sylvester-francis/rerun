@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is `0.x` the public API may change between minor releases.
 
+## [0.1.1] - 2026-07-02
+
+Documentation only; the API and behavior are identical to v0.1.0.
+
+### Changed
+
+- Rewrote the example command and package doc synopses so they read as
+  self-contained descriptions on pkg.go.dev, dropping the internal "day-N" and
+  "Part II hard problem N" references left over from the build tutorial.
+
 ## [0.1.0] - 2026-07-02
 
 Initial release: a lightweight durable execution engine with journal-and-replay
