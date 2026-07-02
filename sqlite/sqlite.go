@@ -63,7 +63,14 @@ func New(path string) *Store {
 			err     TEXT,
 			at      DATETIME NOT NULL,
 			PRIMARY KEY (run_id, seq)
-		);`); err != nil {
+		);
+		CREATE TABLE IF NOT EXISTS signals (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id  TEXT NOT NULL,
+			name    TEXT NOT NULL,
+			payload BLOB
+		);
+		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);`); err != nil {
 		panic(fmt.Sprintf("sqlite: schema: %v", err))
 	}
 	return &Store{db: db}
@@ -154,6 +161,35 @@ func (s *Store) Acquire(ctx context.Context, runID string) (io.Closer, bool, err
 		return nil, false, nil
 	}
 	return closerFunc(s.mu.Unlock), true, nil
+}
+
+// PushSignal and PopSignal implement rerun.Signaler: a durable, per-run,
+// per-name FIFO mailbox. A signal delivered before the workflow reaches Wait
+// waits in the table until Wait pops it, and survives a crash in between.
+func (s *Store) PushSignal(ctx context.Context, runID, name string, payload []byte) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO signals (run_id, name, payload) VALUES (?, ?, ?)`, runID, name, payload)
+	if err != nil {
+		return fmt.Errorf("sqlite: push signal %s/%s: %w", runID, name, err)
+	}
+	return nil
+}
+
+func (s *Store) PopSignal(ctx context.Context, runID, name string) ([]byte, bool, error) {
+	// Delete-and-return the oldest matching signal in one statement, so a pop is
+	// atomic (SetMaxOpenConns(1) also serializes writers).
+	var payload []byte
+	err := s.db.QueryRowContext(ctx,
+		`DELETE FROM signals WHERE id = (
+			SELECT id FROM signals WHERE run_id = ? AND name = ? ORDER BY id LIMIT 1
+		) RETURNING payload`, runID, name).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("sqlite: pop signal %s/%s: %w", runID, name, err)
+	}
+	return payload, true, nil
 }
 
 // Close releases the underlying database handle.

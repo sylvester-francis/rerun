@@ -403,7 +403,7 @@ The same `Store` contract runs against all three backends — in-memory, SQLite 
 **Non-goals (deliberately not provided):**
 
 - **No distributed scheduler.** A sleeping run parks a cheap goroutine; that scales to thousands, not to a durable-timer service polling millions. `Incomplete` plus a due-before query is where that would attach — a planned `v0.2`.
-- **Cancellation and signals are in-process / in-memory for now.** `Cancel` reaches a run executing in this process; `Wait`/`Deliver` need a `Signaler` store and only the in-memory one implements it today. Cross-process cancel and durable signals are `v0.2`.
+- **Cancellation is in-process.** `Cancel` reaches a run executing in this process; cancelling a run running on another node lands with the distributed scheduler in `v0.2`. (Signals *are* durable — all three backends implement `Signaler`.)
 - **Not a Temporal replacement.** `rerun` is the core idea — journal and replay — not the platform (UI, namespaces, cross-language SDKs, activity workers) around it.
 
 Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), run cancellation (`Cancel`), and typed results (`Return`/`Result`) are all built in — see [`docs/using-rerun.md`](docs/using-rerun.md).

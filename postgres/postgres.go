@@ -60,7 +60,14 @@ func New(dsn string) *Store {
 			err     TEXT,
 			at      TIMESTAMPTZ NOT NULL,
 			PRIMARY KEY (run_id, seq)
-		);`); err != nil {
+		);
+		CREATE TABLE IF NOT EXISTS signals (
+			id      BIGSERIAL PRIMARY KEY,
+			run_id  TEXT NOT NULL,
+			name    TEXT NOT NULL,
+			payload BYTEA
+		);
+		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);`); err != nil {
 		panic(fmt.Sprintf("postgres: schema: %v", err))
 	}
 	return &Store{db: db}
@@ -162,6 +169,36 @@ func (s *Store) Acquire(ctx context.Context, runID string) (io.Closer, bool, err
 		return nil, false, nil
 	}
 	return &release{conn: conn, key: key(runID)}, true, nil
+}
+
+// PushSignal and PopSignal implement rerun.Signaler: a durable, per-run,
+// per-name FIFO mailbox. A signal delivered before the workflow reaches Wait
+// waits in the table until Wait pops it, and survives a crash in between.
+func (s *Store) PushSignal(ctx context.Context, runID, name string, payload []byte) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO signals (run_id, name, payload) VALUES ($1, $2, $3)`, runID, name, payload)
+	if err != nil {
+		return fmt.Errorf("postgres: push signal %s/%s: %w", runID, name, err)
+	}
+	return nil
+}
+
+func (s *Store) PopSignal(ctx context.Context, runID, name string) ([]byte, bool, error) {
+	// Delete-and-return the oldest matching signal in one statement. FOR UPDATE
+	// SKIP LOCKED keeps concurrent poppers from taking the same row.
+	var payload []byte
+	err := s.db.QueryRowContext(ctx,
+		`DELETE FROM signals WHERE id = (
+			SELECT id FROM signals WHERE run_id = $1 AND name = $2
+			ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1
+		) RETURNING payload`, runID, name).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("postgres: pop signal %s/%s: %w", runID, name, err)
+	}
+	return payload, true, nil
 }
 
 // Close releases the underlying connection pool.

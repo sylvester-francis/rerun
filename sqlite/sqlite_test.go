@@ -27,3 +27,9 @@ func TestSQLiteStore(t *testing.T) {
 		return sqlite.New(t.TempDir() + "/test.db")
 	})
 }
+
+func TestSQLiteSignaler(t *testing.T) {
+	storetest.RunSignalerContract(t, func() rerun.Signaler {
+		return sqlite.New(t.TempDir() + "/sig.db")
+	})
+}

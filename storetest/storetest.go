@@ -138,3 +138,61 @@ func RunStoreContract(t *testing.T, makeStore func() rerun.Store) {
 		}
 	})
 }
+
+// RunSignalerContract exercises a rerun.Signaler mailbox: FIFO delivery, an
+// empty pop, and isolation by run and by name. Every backend that supports
+// signals — in-memory, SQLite, Postgres — must honor the same behavior.
+func RunSignalerContract(t *testing.T, makeSignaler func() rerun.Signaler) {
+	ctx := context.Background()
+
+	t.Run("push then pop returns the payload", func(t *testing.T) {
+		s := makeSignaler()
+		must(t, s.PushSignal(ctx, "r1", "sig", []byte("hello")))
+		p, ok, err := s.PopSignal(ctx, "r1", "sig")
+		must(t, err)
+		if !ok || string(p) != "hello" {
+			t.Fatalf("pop = %q, %v; want hello, true", p, ok)
+		}
+		if _, ok, err := s.PopSignal(ctx, "r1", "sig"); err != nil || ok {
+			t.Fatalf("second pop should be empty (ok=%v err=%v)", ok, err)
+		}
+	})
+
+	t.Run("pop of an empty mailbox returns not-ok", func(t *testing.T) {
+		s := makeSignaler()
+		if _, ok, err := s.PopSignal(ctx, "nobody", "sig"); err != nil || ok {
+			t.Fatalf("empty pop = ok %v err %v; want false, nil", ok, err)
+		}
+	})
+
+	t.Run("delivery is FIFO", func(t *testing.T) {
+		s := makeSignaler()
+		for _, v := range []string{"a", "b", "c"} {
+			must(t, s.PushSignal(ctx, "r1", "sig", []byte(v)))
+		}
+		for _, want := range []string{"a", "b", "c"} {
+			p, ok, err := s.PopSignal(ctx, "r1", "sig")
+			must(t, err)
+			if !ok || string(p) != want {
+				t.Fatalf("pop = %q, %v; want %q in order", p, ok, want)
+			}
+		}
+	})
+
+	t.Run("isolated by run and name", func(t *testing.T) {
+		s := makeSignaler()
+		must(t, s.PushSignal(ctx, "r1", "x", []byte("1")))
+		must(t, s.PushSignal(ctx, "r2", "x", []byte("2")))
+		must(t, s.PushSignal(ctx, "r1", "y", []byte("3")))
+		pop := func(runID, name, want string) {
+			p, ok, err := s.PopSignal(ctx, runID, name)
+			must(t, err)
+			if !ok || string(p) != want {
+				t.Fatalf("pop %s/%s = %q, %v; want %q", runID, name, p, ok, want)
+			}
+		}
+		pop("r1", "x", "1")
+		pop("r2", "x", "2")
+		pop("r1", "y", "3")
+	})
+}

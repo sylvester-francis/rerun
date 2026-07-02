@@ -27,3 +27,9 @@ func TestMemStore(t *testing.T) {
 		return internal.NewMemStore()
 	})
 }
+
+func TestMemStoreSignaler(t *testing.T) {
+	storetest.RunSignalerContract(t, func() rerun.Signaler {
+		return internal.NewMemStore()
+	})
+}

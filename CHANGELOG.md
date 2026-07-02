@@ -36,7 +36,8 @@ recovery.
   journaled; `Cancel` to stop an in-process run, with a new `Cancelled` status.
 - Part II hard problems: multi-process leasing (non-blocking try-lock
   `Guarder`), durable timers, external signals (`Signaler`, `Deliver`,
-  `Wait[T]`), and safe versioning across deploys (`Version`).
+  `Wait[T]`) with a durable mailbox on all three backends, and safe versioning
+  across deploys (`Version`).
 - A dependency-free mutation tester (`tools/mutate`) that gates the suite: five
   real faults killed, one documented equivalent mutant surviving.
 - Observability via the `Observer` seam; `StepError` so a step's failure
@@ -45,8 +46,8 @@ recovery.
 ### Known limitations (v0.2 fast-follow)
 
 - No distributed scheduler: a sleeping run parks a goroutine rather than being
-  polled from the store. Related: `Cancel` is in-process only, and signals need
-  a `Signaler` store — only the in-memory backend implements one today.
+  polled from the store, and `Cancel` reaches only a run executing in this
+  process. Cross-process cancellation lands with the scheduler.
 - The `postgres` and `sqlite` backends share the module, so importing only the
   core still pulls their (pure-Go) drivers into the module graph. Splitting
   backends into submodules is under consideration.

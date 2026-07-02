@@ -193,10 +193,10 @@ e.Handle("approval", func(w *rerun.W) error {
 engine.Deliver(ctx, "approval:123", "manager-approval", true)
 ```
 
-> **Note:** signals require a `Store` that implements `Signaler`. Today only the
-> in-memory store does; on SQLite/Postgres, `Wait`/`Deliver` panic until you
-> implement `Signaler` (a small signals table) on your backend. Durable
-> cross-process signals are planned.
+> **Note:** signals require a `Store` that implements `Signaler`. All three
+> bundled backends do, so delivery is **durable**: an approval delivered while
+> the process is down waits in the store and is there when the run recovers. A
+> signal delivered before the workflow even reaches `Wait` is queued, not lost.
 
 ---
 
