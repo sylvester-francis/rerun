@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command recover is the day-2 milestone: a run resumes from a partial
-// journal, executing only the unfinished step.
+// Command recover shows crash recovery: a run with a partial journal resumes
+// and executes only its unfinished step, replaying the rest.
 package main
 
 import (

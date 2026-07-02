@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command durablesleep is the day-3 milestone: a Sleep is waited once and
-// skipped on recovery.
+// Command durablesleep shows a durable Sleep: the wait happens once on the
+// first run and is skipped on recovery.
 package main
 
 import (

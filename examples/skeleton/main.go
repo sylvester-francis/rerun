@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command skeleton is the day-1 milestone: a two-step workflow runs forward
-// and journals each step.
+// Command skeleton is the simplest rerun example: a two-step workflow runs
+// forward and prints the journal each step leaves behind.
 package main
 
 import (

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command versioning is Part II hard problem 4: safe deploys across in-flight
-// runs. One binary runs version-2 code that added a fraud check behind Version.
-// An old run pinned to v1 replays its original branch and skips the check; a new
-// run journals v2 and runs it. The journal, not the code, chooses the branch.
+// Command versioning shows safe deploys across in-flight runs. One binary runs
+// version-2 code that added a fraud check behind Version: an old run pinned to
+// v1 replays its original branch and skips the check, while a new run journals
+// v2 and runs it. The journal, not the code, chooses the branch.
 package main
 
 import (

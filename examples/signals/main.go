@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command signals is Part II hard problem 3: a step whose value comes from
-// outside. Phase A delivers an approval live; Phase B recovers a run whose
-// signal is already journaled and finishes with no delivery at all — the value
-// comes from the journal, which is what "waited three days across a restart"
-// needs.
+// Command signals shows a step whose value comes from outside the workflow.
+// Phase A delivers an approval live; Phase B recovers a run whose signal is
+// already journaled and finishes with no delivery at all — the value comes from
+// the journal, which is what "waited three days across a restart" needs.
 package main
 
 import (

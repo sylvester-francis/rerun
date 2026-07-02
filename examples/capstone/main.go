@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command capstone is the day-7 acceptance test: a signup saga (create
-// account, charge with retry, durable wait, welcome email) that crashes after
-// the charge and recovers without charging the card again.
+// Command capstone is an end-to-end signup saga — create account, charge with
+// retry, durable wait, welcome email — that crashes after the charge and
+// recovers without charging the card again.
 package main
 
 import (

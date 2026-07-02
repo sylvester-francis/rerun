@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package storetest is the importable contract suite. Any rerun.Store
-// implementation can prove itself correct by passing RunStoreContract, so the
-// SQLite, Postgres, and in-memory backends are all held to one behavior.
+// Package storetest is the importable contract suite for rerun.Store backends.
+// Any implementation can prove itself correct by passing RunStoreContract, so
+// the SQLite, Postgres, and in-memory backends are all held to one behavior;
+// RunSignalerContract and RunCancellerContract cover the optional Signaler and
+// Canceller capabilities the same way.
 //
 // It lives in an ordinary package, deliberately not a _test.go file, because Go
 // forbids importing a test package: a contract trapped in rerun_test could never

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command workers is Part II hard problem 1: exactly-once dispatch across
-// concurrent workers. Four goroutines race to recover the same twelve runs; the
-// Guarder try-lock ensures each run's side effect fires exactly once. Swapping
+// Command workers shows exactly-once dispatch across concurrent workers: four
+// goroutines race to recover the same twelve runs, and the Guarder try-lock
+// ensures each run's side effect fires exactly once. Swapping
 // internal.NewMemStore() for postgres.New(dsn) makes the same demo genuinely
 // multi-process — the in-memory lock stands in for a Postgres advisory lock, and
 // the dispatch logic is identical (proven by the Postgres store contract).

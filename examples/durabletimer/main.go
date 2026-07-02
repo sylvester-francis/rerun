@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command durabletimer is Part II hard problem 2: a durable timer that waits
-// only the time remaining until a journaled deadline. A manual clock makes a
-// one-hour timer testable in microseconds. The deadline in the journal, not the
+// Command durabletimer shows a durable timer that, after a crash, waits only
+// the time remaining until its journaled deadline. A manual clock makes a
+// one-hour timer testable in microseconds; the deadline in the journal, not the
 // duration in the code, decides how long recovery waits.
 package main
 
