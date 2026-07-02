@@ -1,7 +1,7 @@
 # Local Claude Code settings (machine-specific; never commit)
 .claude/settings.local.json
 
-# SQLite runtime artifacts (the tutorial's backend creates these, e.g. rerun.db)
+# SQLite runtime artifacts (the sqlite backend creates these, e.g. rerun.db)
 *.db
 *.db-shm
 *.db-wal

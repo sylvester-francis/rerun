@@ -52,6 +52,8 @@ e.Handle("checkout", func(w *rerun.W) error {
 
 If the process dies after `charge` but before `receipt`, the next boot's `Recover` replays the journal: `charge` returns its stored result **without re-charging**, the `Sleep` is skipped because its deadline already passed, and execution continues into `receipt`.
 
+> **New to durable execution?** [`docs/durable-execution.md`](docs/durable-execution.md) is a concept-to-code tour — the *why*, the one rule, and how every idea maps to the source.
+
 ## How it works
 
 A workflow is an ordinary Go function. Each step is wrapped in `Do`, which makes a single decision — *have I already done this?*
@@ -150,11 +152,15 @@ import (
 func main() {
 	ctx := context.Background()
 
+	// Swap sqlite.New(path) for postgres.New(dsn) to run across processes —
+	// the workflow code below is identical against any Store.
 	e := rerun.New(sqlite.New("rerun.db"))
 
 	e.Handle("checkout", func(w *rerun.W) error {
+		orderID, _ := rerun.Input[string](w) // the seed passed to Start, replayed on recovery
+
 		txn, err := rerun.Do(w, "charge", func(ctx context.Context) (string, error) {
-			return chargeCard(ctx)
+			return chargeCard(ctx, orderID)
 		})
 		if err != nil {
 			return err
@@ -170,8 +176,8 @@ func main() {
 		return err
 	})
 
-	e.Recover(ctx)              // resume anything that was mid-flight before this boot
-	e.Start(ctx, "checkout", "order-4711") // start a new run
+	e.Recover(ctx)                                  // resume anything mid-flight before this boot
+	e.Start(ctx, "checkout", "run-1", "order-4711") // new run "run-1" seeded with an order ID
 }
 ```
 
@@ -248,6 +254,17 @@ func chargeWithRetry(w *rerun.W) (string, error) {
 ```
 
 On replay the whole attempt sequence is reproduced from the journal without calling the processor again.
+
+## Beyond the basics
+
+The single-process engine extends to the hard problems of durable execution without changing its shape — each is the same insight again (*anything nondeterministic becomes a journaled step*), and each ships with a runnable example.
+
+| Problem | Mechanism | Example |
+|---|---|---|
+| **Multi-process execution** | A non-blocking try-lock lease on `Guarder`; the `postgres` backend uses `pg_try_advisory_lock` on a dedicated connection for exactly-once dispatch across machines. | `examples/workers` |
+| **Durable timers** | `Sleep` journals the absolute deadline; on recovery it waits only the remainder, recomputed from the journal. | `examples/durabletimer` |
+| **Signals & external events** | `Wait[T]` is a `Do` whose value arrives from an external mailbox (`Signaler`); `Deliver` deposits it, and it survives a crash because it's journaled. | `examples/signals` |
+| **Versioning across deploys** | `Version` journals the code-path version so in-flight runs replay their original branch while new runs take the new one. | `examples/versioning` |
 
 ## Design
 
@@ -374,17 +391,6 @@ make pg-test          # Postgres store contract against an ephemeral container (
 
 The same `Store` contract runs against all three backends — in-memory, SQLite (a real file), and Postgres (a real database) — so the durability claim is proven, not asserted.
 
-## Beyond the basics
-
-The single-process engine extends to the hard problems of durable execution without changing its shape — each is the Day 2 insight again (*anything nondeterministic becomes a journaled step*), and each ships with a runnable example.
-
-| Problem | Mechanism | Example |
-|---|---|---|
-| **Multi-process execution** | A non-blocking try-lock lease on `Guarder`; the `postgres` backend uses `pg_try_advisory_lock` on a dedicated connection for exactly-once dispatch across machines. | `examples/workers` |
-| **Durable timers** | `Sleep` journals the absolute deadline; on recovery it waits only the remainder, recomputed from the journal. | `examples/durabletimer` |
-| **Signals & external events** | `Wait[T]` is a `Do` whose value arrives from an external mailbox (`Signaler`); `Deliver` deposits it, and it survives a crash because it's journaled. | `examples/signals` |
-| **Versioning across deploys** | `Version` journals the code-path version so in-flight runs replay their original branch while new runs take the new one. | `examples/versioning` |
-
 ## Guarantees & non-goals
 
 **`rerun` is `v0.x` and unstable** — the API may change between minor versions.
@@ -397,6 +403,12 @@ The single-process engine extends to the hard problems of durable execution with
 - **No typed workflow result yet.** Return a value by journaling it as your final `Do` step and reading it back through the store; a first-class `Result[T]` is a `v0.2` fast-follow.
 - **No distributed scheduler.** A sleeping run parks a cheap goroutine; that scales to thousands, not to a durable-timer service polling millions. `Incomplete` plus a due-before query is where that would attach.
 - **Not a Temporal replacement.** `rerun` is the core idea — journal and replay — not the platform (UI, namespaces, cross-language SDKs, activity workers) around it.
+
+## Documentation
+
+- [`docs/durable-execution.md`](docs/durable-execution.md) — a concept-to-code tour of durable execution and this codebase; also an adoption on-ramp.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`CHANGELOG.md`](CHANGELOG.md)
+- API reference on [pkg.go.dev](https://pkg.go.dev/github.com/sylvester-francis/rerun).
 
 ## License
 
