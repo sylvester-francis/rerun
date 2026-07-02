@@ -14,9 +14,16 @@
 
 package internal_test
 
-import "testing"
+import (
+	"testing"
 
-// TestMemStore runs the shared store contract against the in-memory backend:
-//
-//	storetest.RunStoreContract(t, func() rerun.Store { return internal.NewMemStore() })
-func TestMemStore(t *testing.T) { t.Skip("not implemented") }
+	"github.com/sylvester-francis/rerun"
+	"github.com/sylvester-francis/rerun/internal"
+	"github.com/sylvester-francis/rerun/storetest"
+)
+
+func TestMemStore(t *testing.T) {
+	storetest.RunStoreContract(t, func() rerun.Store {
+		return internal.NewMemStore()
+	})
+}

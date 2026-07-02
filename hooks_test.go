@@ -14,8 +14,57 @@
 
 package rerun_test
 
-import "testing"
+import (
+	"context"
+	"testing"
 
-func TestObserver_ReceivesAllEvents(t *testing.T) { t.Skip("not implemented") }
+	"github.com/sylvester-francis/rerun"
+)
 
-func TestObserver_NotCalledDuringReplay(t *testing.T) { t.Skip("not implemented") }
+func TestObserver_ReceivesAllEvents(t *testing.T) {
+	spy := &spyObserver{}
+	eng, store, _ := setupWith(t, rerun.WithObserver(spy))
+	eng.Handle("wf", func(w *rerun.W) error {
+		rerun.Do(w, "a", func(context.Context) (int, error) { return 1, nil })
+		rerun.Do(w, "b", func(context.Context) (int, error) { return 2, nil })
+		return nil
+	})
+	must(t, eng.Start(context.Background(), "wf", "r1"))
+	waitDone(t, store, "r1")
+
+	starts, steps, finishes := spy.snapshot()
+	if starts != 1 {
+		t.Fatalf("OnStart fired %d times, want 1", starts)
+	}
+	if steps != 2 {
+		t.Fatalf("OnStep fired %d times, want 2", steps)
+	}
+	if len(finishes) != 1 || finishes[0] != rerun.Done {
+		t.Fatalf("OnFinish = %v, want [Done]", finishes)
+	}
+}
+
+func TestObserver_NotCalledDuringReplay(t *testing.T) {
+	spy := &spyObserver{}
+	eng, store, _ := setupWith(t, rerun.WithObserver(spy))
+	eng.Handle("wf", func(w *rerun.W) error {
+		rerun.Do(w, "a", func(context.Context) (int, error) { return 1, nil })
+		rerun.Do(w, "b", func(context.Context) (int, error) { return 2, nil })
+		return nil
+	})
+	ctx := context.Background()
+	must(t, eng.Start(ctx, "wf", "r1"))
+	waitDone(t, store, "r1")
+
+	// A completed step is replayed, not re-run, so its observer event must not
+	// fire a second time.
+	must(t, store.Finish(ctx, "r1", rerun.Running))
+	spy.clearSteps()
+	must(t, eng.Recover(ctx))
+	waitDone(t, store, "r1")
+
+	_, steps, _ := spy.snapshot()
+	if steps != 0 {
+		t.Fatalf("OnStep fired %d times during replay, want 0", steps)
+	}
+}

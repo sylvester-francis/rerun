@@ -14,8 +14,32 @@
 
 package rerun_test
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-func TestFakeClock_Advance(t *testing.T) { t.Skip("not implemented") }
+func TestFakeClock_Advance(t *testing.T) {
+	clk := newFakeClock()
+	ch := clk.After(time.Hour)
+	select {
+	case <-ch:
+		t.Fatal("timer fired before the clock advanced")
+	default:
+	}
+	clk.Advance(time.Hour)
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("timer did not fire after the clock advanced past its deadline")
+	}
+}
 
-func TestFakeClock_Now(t *testing.T) { t.Skip("not implemented") }
+func TestFakeClock_Now(t *testing.T) {
+	clk := newFakeClock()
+	base := clk.Now()
+	clk.Advance(90 * time.Minute)
+	if got := clk.Now().Sub(base); got != 90*time.Minute {
+		t.Fatalf("Now advanced by %v, want 90m", got)
+	}
+}

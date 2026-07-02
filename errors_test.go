@@ -14,8 +14,25 @@
 
 package rerun_test
 
-import "testing"
+import (
+	"errors"
+	"testing"
 
-func TestStepError_Format(t *testing.T) { t.Skip("not implemented") }
+	"github.com/sylvester-francis/rerun"
+)
 
-func TestStepError_Interface(t *testing.T) { t.Skip("not implemented") }
+func TestStepError_Format(t *testing.T) {
+	e := &rerun.StepError{Tag: "charge", Msg: "declined"}
+	want := `rerun: step "charge": declined`
+	if got := e.Error(); got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestStepError_Interface(t *testing.T) {
+	var err error = &rerun.StepError{Tag: "t", Msg: "m"}
+	var se *rerun.StepError
+	if !errors.As(err, &se) {
+		t.Fatal("StepError should satisfy error and unwrap via errors.As")
+	}
+}

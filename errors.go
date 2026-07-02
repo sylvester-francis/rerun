@@ -14,11 +14,15 @@
 
 package rerun
 
-// StepError carries a failed step's tag and message so the error survives
-// being journaled and replayed.
+import "fmt"
+
+// StepError carries a failed step's tag and message so the failure survives
+// being journaled and is reconstructed identically on replay.
 type StepError struct {
 	Tag string
 	Msg string
 }
 
-func (e *StepError) Error() string { panic("rerun: not implemented") }
+func (e *StepError) Error() string {
+	return fmt.Sprintf("rerun: step %q: %s", e.Tag, e.Msg)
+}

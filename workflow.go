@@ -16,35 +16,95 @@ package rerun
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
-// W is the workflow handle threaded through every step. It carries the
-// loaded journal and the replay cursor.
+// W is the handle threaded through a workflow. It carries the loaded journal
+// and a cursor so Do can tell replay from live execution.
 type W struct {
 	RunID string
 
 	seq    int
 	logs   []Log
+	input  []byte
 	replay bool
 	eng    *Engine
 	ctx    context.Context
 }
 
 // Do runs a step exactly once. On the first run it executes fn, journals the
-// result, and returns it. On replay it returns the journaled value without
-// executing fn. It panics if the tag diverges from the journal.
+// result, and returns it; on replay it returns the journaled result without
+// executing fn. It panics if the tag diverges from the journal: that means the
+// workflow is no longer deterministic, and every later positional match would
+// be meaningless.
 func Do[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, error) {
-	panic("rerun: not implemented")
+	if w.replay && w.seq < len(w.logs) {
+		return replayStep[T](w, tag)
+	}
+	return liveStep(w, tag, fn)
 }
 
-// replayStep returns the journaled result for tag, panicking on a tag mismatch.
-func replayStep[T any](w *W, tag string) (T, error) { panic("rerun: not implemented") }
+func replayStep[T any](w *W, tag string) (T, error) {
+	l := w.logs[w.seq]
+	if l.Tag != tag {
+		panic(fmt.Sprintf(
+			"rerun: determinism broken at seq %d in run %s: journal=%q code=%q",
+			w.seq, w.RunID, l.Tag, tag,
+		))
+	}
+	w.seq++
 
-// liveStep executes fn, journals the result, and notifies the observer.
+	var v T
+	if err := w.eng.codec.Unmarshal(l.Payload, &v); err != nil {
+		panic(fmt.Sprintf("rerun: journal corrupt at seq %d in run %s: %v", w.seq-1, w.RunID, err))
+	}
+	if l.Err != "" {
+		return v, &StepError{Tag: l.Tag, Msg: l.Err}
+	}
+	return v, nil
+}
+
 func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, error) {
-	panic("rerun: not implemented")
+	w.replay = false
+	v, err := fn(w.ctx)
+
+	b, merr := w.eng.codec.Marshal(v)
+	if merr != nil {
+		panic(fmt.Sprintf("rerun: marshal failed at seq %d in run %s: %v", w.seq, w.RunID, merr))
+	}
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	l := Log{Seq: w.seq, Tag: tag, Payload: b, Err: errStr, At: w.eng.clock.Now()}
+	if serr := w.eng.store.Append(w.ctx, w.RunID, l); serr != nil {
+		panic(fmt.Sprintf("rerun: journal write failed at seq %d in run %s: %v", w.seq, w.RunID, serr))
+	}
+	w.eng.obs.OnStep(w.RunID, l)
+
+	w.seq++
+	return v, err
 }
 
-// Sleep is a durable delay: it survives restarts and is skipped on replay.
-func Sleep(w *W, d time.Duration) error { panic("rerun: not implemented") }
+// Sleep is a durable delay. It journals an absolute deadline as an instant step,
+// then waits only the time still remaining until that deadline, recomputed on
+// every run. A restart before the deadline waits out the remainder; a restart
+// after it returns immediately. The wait itself is never journaled — it is a
+// function of the deadline and the clock, so it is always recomputed, never
+// stored.
+func Sleep(w *W, d time.Duration) error {
+	deadline, _ := Do(w, fmt.Sprintf("sleep:%v", d), func(context.Context) (int64, error) {
+		return w.eng.clock.Now().Add(d).UnixNano(), nil
+	})
+	remaining := time.Unix(0, deadline).Sub(w.eng.clock.Now())
+	if remaining <= 0 {
+		return nil
+	}
+	select {
+	case <-w.eng.clock.After(remaining):
+		return nil
+	case <-w.ctx.Done():
+		return w.ctx.Err()
+	}
+}

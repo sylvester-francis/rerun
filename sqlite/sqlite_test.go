@@ -14,9 +14,16 @@
 
 package sqlite_test
 
-import "testing"
+import (
+	"testing"
 
-// TestSQLiteStore runs the shared store contract against the SQLite backend:
-//
-//	storetest.RunStoreContract(t, func() rerun.Store { return sqlite.New(t.TempDir() + "/test.db") })
-func TestSQLiteStore(t *testing.T) { t.Skip("not implemented") }
+	"github.com/sylvester-francis/rerun"
+	"github.com/sylvester-francis/rerun/sqlite"
+	"github.com/sylvester-francis/rerun/storetest"
+)
+
+func TestSQLiteStore(t *testing.T) {
+	storetest.RunStoreContract(t, func() rerun.Store {
+		return sqlite.New(t.TempDir() + "/test.db")
+	})
+}

@@ -25,8 +25,8 @@ type Observer interface {
 // noopObserver is the default Observer: it does nothing.
 type noopObserver struct{}
 
-func (noopObserver) OnStart(r Run) {}
+func (noopObserver) OnStart(Run) {}
 
-func (noopObserver) OnStep(runID string, l Log) {}
+func (noopObserver) OnStep(string, Log) {}
 
-func (noopObserver) OnFinish(runID string, s Status) {}
+func (noopObserver) OnFinish(string, Status) {}

@@ -18,45 +18,142 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"sort"
 	"sync"
 
 	"github.com/sylvester-francis/rerun"
 )
 
-// MemStore is an in-memory rerun.Store backed by maps and a mutex.
+// MemStore is an in-memory rerun.Store backed by maps and a mutex. It is the
+// zero-dependency default, useful for tests and for single-process programs
+// that do not need to outlive a restart.
 type MemStore struct {
-	mu   sync.Mutex
-	runs map[string]rerun.Run
-	logs map[string][]rerun.Log
+	mu      sync.Mutex
+	runs    map[string]rerun.Run
+	logs    map[string][]rerun.Log
+	held    map[string]bool
+	signals map[string][][]byte
 }
 
 // NewMemStore returns an empty MemStore.
-func NewMemStore() *MemStore { panic("rerun: not implemented") }
-
-func (s *MemStore) Create(ctx context.Context, r rerun.Run) error {
-	panic("rerun: not implemented")
+func NewMemStore() *MemStore {
+	return &MemStore{
+		runs:    make(map[string]rerun.Run),
+		logs:    make(map[string][]rerun.Log),
+		held:    make(map[string]bool),
+		signals: make(map[string][][]byte),
+	}
 }
 
-func (s *MemStore) Append(ctx context.Context, runID string, l rerun.Log) error {
-	panic("rerun: not implemented")
+func (m *MemStore) Create(ctx context.Context, r rerun.Run) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, dup := m.runs[r.ID]; dup {
+		return fmt.Errorf("memstore: run %s already exists", r.ID)
+	}
+	m.runs[r.ID] = r
+	return nil
 }
 
-func (s *MemStore) Finish(ctx context.Context, runID string, st rerun.Status) error {
-	panic("rerun: not implemented")
+func (m *MemStore) Append(ctx context.Context, runID string, l rerun.Log) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logs[runID] = append(m.logs[runID], l)
+	return nil
 }
 
-func (s *MemStore) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error) {
-	panic("rerun: not implemented")
+func (m *MemStore) Finish(ctx context.Context, runID string, s rerun.Status) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[runID]
+	if !ok {
+		return fmt.Errorf("memstore: run %s not found", runID)
+	}
+	r.Status = s
+	m.runs[runID] = r
+	return nil
 }
 
-func (s *MemStore) Incomplete(ctx context.Context) ([]rerun.Run, error) {
-	panic("rerun: not implemented")
+func (m *MemStore) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	src := m.logs[runID]
+	out := make([]rerun.Log, len(src))
+	copy(out, src)
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
 }
 
-func (s *MemStore) Acquire(ctx context.Context, runID string) (io.Closer, error) {
-	panic("rerun: not implemented")
+func (m *MemStore) Incomplete(ctx context.Context) ([]rerun.Run, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []rerun.Run
+	for _, r := range m.runs {
+		if r.Status == rerun.Pending || r.Status == rerun.Running {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
-// Get returns a run by ID. It is a test aid used by the examples.
-func (s *MemStore) Get(id string) (rerun.Run, bool) { panic("rerun: not implemented") }
+// Acquire is a non-blocking try-lock over an in-memory held set. It stands in
+// for a distributed lease: many goroutines sharing one MemStore contend exactly
+// as many processes sharing a database would, which is what lets the worker
+// example prove exactly-once dispatch without a cluster.
+func (m *MemStore) Acquire(ctx context.Context, runID string) (io.Closer, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.held[runID] {
+		return nil, false, nil
+	}
+	m.held[runID] = true
+	return closerFunc(func() error {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(m.held, runID)
+		return nil
+	}), true, nil
+}
+
+// Get returns a run by ID. It is a test aid used by the examples to read a run's
+// status directly; it is not part of the Store contract.
+func (m *MemStore) Get(id string) (rerun.Run, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[id]
+	return r, ok
+}
+
+// PushSignal and PopSignal implement rerun.Signaler: a per-run, per-name mailbox
+// queue. Delivery can land before the workflow reaches Wait, so events queue
+// rather than hand off to a waiting goroutine — a signal delivered early sits in
+// the mailbox until Wait polls and finds it.
+func (m *MemStore) PushSignal(ctx context.Context, runID, name string, payload []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := sigKey(runID, name)
+	m.signals[k] = append(m.signals[k], payload)
+	return nil
+}
+
+func (m *MemStore) PopSignal(ctx context.Context, runID, name string) ([]byte, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := sigKey(runID, name)
+	q := m.signals[k]
+	if len(q) == 0 {
+		return nil, false, nil
+	}
+	p := q[0]
+	m.signals[k] = q[1:]
+	return p, true, nil
+}
+
+func sigKey(runID, name string) string { return runID + "\x00" + name }
+
+// closerFunc adapts a release function to io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }

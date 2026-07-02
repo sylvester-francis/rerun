@@ -14,15 +14,14 @@
 
 package rerun
 
-// Codec serializes step results into and out of the journal.
+import "encoding/json"
+
 type Codec interface {
 	Marshal(v any) ([]byte, error)
 	Unmarshal(data []byte, v any) error
 }
 
-// jsonCodec is the default Codec, delegating to encoding/json.
 type jsonCodec struct{}
 
-func (jsonCodec) Marshal(v any) ([]byte, error) { panic("rerun: not implemented") }
-
-func (jsonCodec) Unmarshal(data []byte, v any) error { panic("rerun: not implemented") }
+func (jsonCodec) Marshal(v any) ([]byte, error)      { return json.Marshal(v) }
+func (jsonCodec) Unmarshal(data []byte, v any) error { return json.Unmarshal(data, v) }

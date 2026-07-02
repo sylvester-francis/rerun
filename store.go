@@ -16,11 +16,12 @@ package rerun
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 )
 
-// Status is the lifecycle state of a Run.
+// Status is a run's lifecycle state.
 type Status int
 
 const (
@@ -30,7 +31,24 @@ const (
 	Failed
 )
 
-// Log is an immutable journal entry: one completed step.
+func (s Status) String() string {
+	switch s {
+	case Pending:
+		return "Pending"
+	case Running:
+		return "Running"
+	case Done:
+		return "Done"
+	case Failed:
+		return "Failed"
+	default:
+		return fmt.Sprintf("Status(%d)", int(s))
+	}
+}
+
+// Log is one immutable journal entry: the result a completed step produced.
+// Persisting the result a step produced — not merely the fact that a step ran —
+// is what lets recovery replay a step instead of executing it a second time.
 type Log struct {
 	Seq     int
 	Tag     string
@@ -39,7 +57,7 @@ type Log struct {
 	At      time.Time
 }
 
-// Run is workflow-instance metadata.
+// Run is the metadata for a single workflow instance.
 type Run struct {
 	ID       string
 	Workflow string
@@ -47,27 +65,33 @@ type Run struct {
 	Created  time.Time
 }
 
-// Writer is the hot path: it persists runs and journal entries.
+// Writer is the hot path: creating a run and appending step results as they
+// complete.
 type Writer interface {
 	Create(ctx context.Context, r Run) error
 	Append(ctx context.Context, runID string, l Log) error
 	Finish(ctx context.Context, runID string, s Status) error
 }
 
-// Reader is the cold path: it loads journals and finds incomplete runs.
+// Reader is the cold path: loading a journal to replay it and finding the runs
+// a restart left unfinished.
 type Reader interface {
 	LoadLogs(ctx context.Context, runID string) ([]Log, error)
 	Incomplete(ctx context.Context) ([]Run, error)
 }
 
-// Guarder provides mutual exclusion for a run. Backends that don't need
-// locking may return io.NopCloser(nil).
+// Guarder leases a run to one worker. Acquire is a non-blocking try-lock:
+// acquired is false when another worker already holds the run, so recovery
+// across many processes never replays the same run twice. A single-process
+// store that never contends may always report acquired.
 type Guarder interface {
-	Acquire(ctx context.Context, runID string) (io.Closer, error)
+	Acquire(ctx context.Context, runID string) (release io.Closer, acquired bool, err error)
 }
 
-// Store composes the three persistence interfaces. Any implementation is a
-// drop-in: the engine cannot tell SQLite from Postgres from in-memory.
+// Store is the whole persistence seam. It is split three ways so a consumer can
+// depend on only the face it uses — a dashboard on Reader, a lease manager on
+// Guarder, a log shipper on Writer — and so any backend is a drop-in the engine
+// cannot tell apart.
 type Store interface {
 	Writer
 	Reader

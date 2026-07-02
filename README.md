@@ -14,9 +14,10 @@
 **A multi-step process that runs to completion — even when the machine crashes halfway through and restarts hours later. It resumes from where it left off instead of starting over.**
 
 [![Go Reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/sylvester-francis/rerun)
-[![Go Version](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![Go Version](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![Tests](https://img.shields.io/badge/go%20test-race-44cc11)](#testing)
 [![Core deps](https://img.shields.io/badge/core%20deps-0-success)](#design)
+[![Status](https://img.shields.io/badge/status-v0.x%20unstable-orange)](#guarantees--non-goals)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 `Do` · `Sleep` · `Recover` — that's the whole API.
@@ -131,7 +132,7 @@ flowchart LR
 go get github.com/sylvester-francis/rerun
 ```
 
-Requires Go 1.21+ (generics power the type-safe `Do[T]`).
+The core engine needs only Go 1.18+ (generics power the type-safe `Do[T]`). The bundled pure-Go SQLite and Postgres backends pull the module's minimum to **Go 1.25**; if you need a lower floor, use the in-memory store or your own `Store` and those backends never enter your build.
 
 ## Quick start
 
@@ -183,10 +184,18 @@ The whole surface a user touches — small because the idea is small:
 | `New(store, ...Opt)` | Build an engine over a `Store`. |
 | `WithCodec` / `WithClock` / `WithObserver` | Functional options for serialization, time, and lifecycle events. |
 | `Handle(name, fn)` | Register a workflow function. |
-| `Start(ctx, name, runID)` | Launch a new run in its own goroutine. |
+| `Start(ctx, name, runID, in...)` | Launch a new run in its own goroutine, with an optional journaled input. |
 | `Recover(ctx)` | Re-launch every incomplete run after a restart. |
 | `Do[T](w, tag, fn)` | Run a step once; return its journaled value on replay. |
 | `Sleep(w, d)` | A durable delay that survives restarts and is skipped on replay. |
+| `Input[T](w)` | Read the value passed to `Start`, journaled as the run's seed. |
+
+For multi-run and multi-process workloads, a few more primitives build on the same journal:
+
+| Symbol | What it's for |
+|---|---|
+| `Wait[T](w, name)` / `Deliver(ctx, runID, name, v)` | Block on an external event (an approval, a webhook) and journal it, so it survives a crash. Needs a `Signaler` store. |
+| `Version(w, changeID, min, max)` | Pin an in-flight run to its original code path so a deploy that changes the workflow doesn't break it. |
 
 Everything else is an interface a backend implements, or an internal detail.
 
@@ -259,15 +268,16 @@ flowchart TD
       Engine -. "uses" .-> Observer([Observer])
     end
 
-    Store -.->|implemented by| SQLite["sqlite<br/><i>pure-Go, persistent</i>"]
+    Store -.->|implemented by| SQLite["sqlite<br/><i>pure-Go, single node</i>"]
     Store -.->|implemented by| Mem["internal/memstore<br/><i>in-memory default</i>"]
-    Store -.->|implemented by| PG["your backend<br/><i>Postgres, …</i>"]
+    Store -.->|implemented by| PG["postgres<br/><i>multi-process lease</i>"]
+    Store -.->|implemented by| Own["your backend<br/><i>…</i>"]
     Codec -.->|default| JSON["jsonCodec"]
     Clock -.->|default| Wall["wall clock"]
     Observer -.->|default| Noop["no-op"]
 ```
 
-> Arrows are dependencies. Nothing inside `Core` points outward at a concrete implementation — adapters depend on the interfaces, never the reverse. Adding a Postgres backend, a protobuf codec, or a metrics observer never touches engine source.
+> Arrows are dependencies. Nothing inside `Core` points outward at a concrete implementation — adapters depend on the interfaces, never the reverse. The Postgres backend was added exactly this way: a new package satisfying `Store`, zero lines of engine source changed. A protobuf codec or a metrics observer slots in the same way.
 
 Backends and extensions never import the engine; the engine imports no adapter. Each piece changes for exactly one reason:
 
@@ -340,12 +350,17 @@ rerun/
 ├── engine.go           the engine: registry, New, Handle, options
 ├── workflow.go         Do, replayStep, liveStep, Sleep
 ├── run.go              Start, exec, Recover
+├── input.go            Input[T], the run's journaled seed
+├── signal.go           Signaler, Deliver, Wait[T] — steps whose value comes from outside
+├── version.go          Version — pin in-flight runs across a deploy
 ├── errors.go           StepError, so errors survive replay
 ├── internal/memstore.go   in-process store (the default and a test aid)
 ├── storetest/             importable Store contract suite for any backend
-├── sqlite/sqlite.go       a real, persistent backend (pure Go, zero CGO)
+├── sqlite/sqlite.go       persistent single-node backend (pure Go, zero CGO)
+├── postgres/postgres.go   multi-process backend (advisory-lock lease)
 ├── tools/mutate/          dependency-free mutation tester
 └── examples/              skeleton · recover · durablesleep · capstone
+                           workers · durabletimer · signals · versioning
 ```
 
 ## Testing
@@ -354,18 +369,34 @@ rerun/
 go test -race ./...   # the whole suite, race-clean
 go vet ./...
 make mutate           # mutation testing: known faults are killed
+make pg-test          # Postgres store contract against an ephemeral container (needs Docker)
 ```
 
-## Roadmap
+The same `Store` contract runs against all three backends — in-memory, SQLite (a real file), and Postgres (a real database) — so the durability claim is proven, not asserted.
 
-The core engine is single-process. Beyond it lie the hard problems of distributed durable execution:
+## Beyond the basics
 
-| Problem | Mechanism |
-|---|---|
-| **Multi-process execution** | A try-lock lease on `Guarder`; Postgres advisory locks for exactly-once dispatch across machines. |
-| **Durable timers** | Journal the absolute deadline; on recovery, wait only the remainder. |
-| **Signals & external events** | `Wait[T]` — a `Do` whose value arrives from an external mailbox. |
-| **Versioning across deploys** | Journal the version and branch on the journaled value, so old and new runs coexist on one binary. |
+The single-process engine extends to the hard problems of durable execution without changing its shape — each is the Day 2 insight again (*anything nondeterministic becomes a journaled step*), and each ships with a runnable example.
+
+| Problem | Mechanism | Example |
+|---|---|---|
+| **Multi-process execution** | A non-blocking try-lock lease on `Guarder`; the `postgres` backend uses `pg_try_advisory_lock` on a dedicated connection for exactly-once dispatch across machines. | `examples/workers` |
+| **Durable timers** | `Sleep` journals the absolute deadline; on recovery it waits only the remainder, recomputed from the journal. | `examples/durabletimer` |
+| **Signals & external events** | `Wait[T]` is a `Do` whose value arrives from an external mailbox (`Signaler`); `Deliver` deposits it, and it survives a crash because it's journaled. | `examples/signals` |
+| **Versioning across deploys** | `Version` journals the code-path version so in-flight runs replay their original branch while new runs take the new one. | `examples/versioning` |
+
+## Guarantees & non-goals
+
+**`rerun` is `v0.x` and unstable** — the API may change between minor versions.
+
+**What it guarantees:** runs are **durable** and **resumable**. Side effects are **at-least-once**, and **exactly-once only when your steps are idempotent**. A step repeats only if the process dies in the narrow window *after* its side effect runs and *before* its journal entry commits — which is why production steps (a card charge, an email) are written to be idempotent. Any claim of plain "exactly once" would be dishonest.
+
+**Non-goals (deliberately not provided):**
+
+- **No built-in retry policy, per-step timeouts, or run cancellation.** The retry pattern already works as a loop over `Do`; timeouts build on `context` and durable `Sleep`. These are a planned `v0.2`, not launch blockers.
+- **No typed workflow result yet.** Return a value by journaling it as your final `Do` step and reading it back through the store; a first-class `Result[T]` is a `v0.2` fast-follow.
+- **No distributed scheduler.** A sleeping run parks a cheap goroutine; that scales to thousands, not to a durable-timer service polling millions. `Incomplete` plus a due-before query is where that would attach.
+- **Not a Temporal replacement.** `rerun` is the core idea — journal and replay — not the platform (UI, namespaces, cross-language SDKs, activity workers) around it.
 
 ## License
 

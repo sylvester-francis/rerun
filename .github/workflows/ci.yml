@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rerun
+          POSTGRES_PASSWORD: rerun
+          POSTGRES_DB: rerun
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rerun"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: vet
+        run: go vet ./...
+      - name: test (race)
+        run: go test -race ./...
+      - name: mutation gate
+        run: go run ./tools/mutate
+      - name: postgres store contract
+        env:
+          RERUN_PG_DSN: postgres://rerun:rerun@localhost:5432/rerun?sslmode=disable
+        run: go test -tags postgres -race ./postgres/

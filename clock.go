@@ -25,6 +25,6 @@ type Clock interface {
 // wall is the default Clock, delegating to the standard library.
 type wall struct{}
 
-func (wall) Now() time.Time { panic("rerun: not implemented") }
+func (wall) Now() time.Time { return time.Now() }
 
-func (wall) After(d time.Duration) <-chan time.Time { panic("rerun: not implemented") }
+func (wall) After(d time.Duration) <-chan time.Time { return time.After(d) }
