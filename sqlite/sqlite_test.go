@@ -33,3 +33,9 @@ func TestSQLiteSignaler(t *testing.T) {
 		return sqlite.New(t.TempDir() + "/sig.db")
 	})
 }
+
+func TestSQLiteCanceller(t *testing.T) {
+	storetest.RunCancellerContract(t, func() rerun.Canceller {
+		return sqlite.New(t.TempDir() + "/cancel.db")
+	})
+}

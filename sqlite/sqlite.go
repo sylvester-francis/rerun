@@ -70,7 +70,8 @@ func New(path string) *Store {
 			name    TEXT NOT NULL,
 			payload BLOB
 		);
-		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);`); err != nil {
+		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);
+		CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`); err != nil {
 		panic(fmt.Sprintf("sqlite: schema: %v", err))
 	}
 	return &Store{db: db}
@@ -190,6 +191,28 @@ func (s *Store) PopSignal(ctx context.Context, runID, name string) ([]byte, bool
 		return nil, false, fmt.Errorf("sqlite: pop signal %s/%s: %w", runID, name, err)
 	}
 	return payload, true, nil
+}
+
+// RequestCancel and CancelRequested implement rerun.Canceller: a durable cancel
+// flag so Cancel can reach a run executing in another process.
+func (s *Store) RequestCancel(ctx context.Context, runID string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO cancellations (run_id) VALUES (?)`, runID)
+	if err != nil {
+		return fmt.Errorf("sqlite: request cancel %s: %w", runID, err)
+	}
+	return nil
+}
+
+func (s *Store) CancelRequested(ctx context.Context, runID string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM cancellations WHERE run_id = ?`, runID).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("sqlite: cancel requested %s: %w", runID, err)
+	}
+	return true, nil
 }
 
 // Close releases the underlying database handle.

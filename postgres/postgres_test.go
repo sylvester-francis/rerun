@@ -53,11 +53,28 @@ func TestPostgresStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer raw.Close()
-	if _, err := raw.Exec(`TRUNCATE runs, journal, signals`); err != nil {
+	if _, err := raw.Exec(`TRUNCATE runs, journal, signals, cancellations`); err != nil {
 		t.Fatal(err)
 	}
 
 	storetest.RunStoreContract(t, func() rerun.Store {
+		return postgres.New(d)
+	})
+}
+
+func TestPostgresCanceller(t *testing.T) {
+	d := dsn(t)
+	postgres.New(d).Close() // ensure the schema exists
+	raw, err := sql.Open("postgres", d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`TRUNCATE cancellations`); err != nil {
+		t.Fatal(err)
+	}
+
+	storetest.RunCancellerContract(t, func() rerun.Canceller {
 		return postgres.New(d)
 	})
 }

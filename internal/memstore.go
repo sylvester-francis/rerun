@@ -30,20 +30,22 @@ import (
 // zero-dependency default, useful for tests and for single-process programs
 // that do not need to outlive a restart.
 type MemStore struct {
-	mu      sync.Mutex
-	runs    map[string]rerun.Run
-	logs    map[string][]rerun.Log
-	held    map[string]bool
-	signals map[string][][]byte
+	mu        sync.Mutex
+	runs      map[string]rerun.Run
+	logs      map[string][]rerun.Log
+	held      map[string]bool
+	signals   map[string][][]byte
+	cancelReq map[string]bool
 }
 
 // NewMemStore returns an empty MemStore.
 func NewMemStore() *MemStore {
 	return &MemStore{
-		runs:    make(map[string]rerun.Run),
-		logs:    make(map[string][]rerun.Log),
-		held:    make(map[string]bool),
-		signals: make(map[string][][]byte),
+		runs:      make(map[string]rerun.Run),
+		logs:      make(map[string][]rerun.Log),
+		held:      make(map[string]bool),
+		signals:   make(map[string][][]byte),
+		cancelReq: make(map[string]bool),
 	}
 }
 
@@ -152,6 +154,21 @@ func (m *MemStore) PopSignal(ctx context.Context, runID, name string) ([]byte, b
 }
 
 func sigKey(runID, name string) string { return runID + "\x00" + name }
+
+// RequestCancel and CancelRequested implement rerun.Canceller: a durable flag
+// that a run should be cancelled, so Cancel can reach a run executing elsewhere.
+func (m *MemStore) RequestCancel(ctx context.Context, runID string) error {
+	m.mu.Lock()
+	m.cancelReq[runID] = true
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *MemStore) CancelRequested(ctx context.Context, runID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cancelReq[runID], nil
+}
 
 // closerFunc adapts a release function to io.Closer.
 type closerFunc func() error

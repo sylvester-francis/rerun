@@ -67,7 +67,8 @@ func New(dsn string) *Store {
 			name    TEXT NOT NULL,
 			payload BYTEA
 		);
-		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);`); err != nil {
+		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);
+		CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`); err != nil {
 		panic(fmt.Sprintf("postgres: schema: %v", err))
 	}
 	return &Store{db: db}
@@ -199,6 +200,27 @@ func (s *Store) PopSignal(ctx context.Context, runID, name string) ([]byte, bool
 		return nil, false, fmt.Errorf("postgres: pop signal %s/%s: %w", runID, name, err)
 	}
 	return payload, true, nil
+}
+
+// RequestCancel and CancelRequested implement rerun.Canceller: a durable cancel
+// flag so Cancel can reach a run executing in another process.
+func (s *Store) RequestCancel(ctx context.Context, runID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO cancellations (run_id) VALUES ($1) ON CONFLICT DO NOTHING`, runID)
+	if err != nil {
+		return fmt.Errorf("postgres: request cancel %s: %w", runID, err)
+	}
+	return nil
+}
+
+func (s *Store) CancelRequested(ctx context.Context, runID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM cancellations WHERE run_id = $1)`, runID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("postgres: cancel requested %s: %w", runID, err)
+	}
+	return exists, nil
 }
 
 // Close releases the underlying connection pool.

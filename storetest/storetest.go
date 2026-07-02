@@ -196,3 +196,43 @@ func RunSignalerContract(t *testing.T, makeSignaler func() rerun.Signaler) {
 		pop("r1", "y", "3")
 	})
 }
+
+// RunCancellerContract exercises a rerun.Canceller: a fresh run is not
+// cancel-requested, RequestCancel makes it so, the flag is per-run, and
+// requesting twice is harmless. Every backend that supports cross-process
+// cancellation must honor it.
+func RunCancellerContract(t *testing.T, makeStore func() rerun.Canceller) {
+	ctx := context.Background()
+
+	t.Run("request then requested is true", func(t *testing.T) {
+		c := makeStore()
+		if req, err := c.CancelRequested(ctx, "r1"); err != nil || req {
+			t.Fatalf("fresh run: requested %v err %v; want false, nil", req, err)
+		}
+		must(t, c.RequestCancel(ctx, "r1"))
+		req, err := c.CancelRequested(ctx, "r1")
+		must(t, err)
+		if !req {
+			t.Fatal("after RequestCancel, CancelRequested should be true")
+		}
+	})
+
+	t.Run("flag is per-run", func(t *testing.T) {
+		c := makeStore()
+		must(t, c.RequestCancel(ctx, "r1"))
+		if req, err := c.CancelRequested(ctx, "r2"); err != nil || req {
+			t.Fatalf("cancel of r1 leaked to r2 (req %v err %v)", req, err)
+		}
+	})
+
+	t.Run("request is idempotent", func(t *testing.T) {
+		c := makeStore()
+		must(t, c.RequestCancel(ctx, "r1"))
+		must(t, c.RequestCancel(ctx, "r1")) // a repeat must not error
+		req, err := c.CancelRequested(ctx, "r1")
+		must(t, err)
+		if !req {
+			t.Fatal("still requested after a repeated RequestCancel")
+		}
+	})
+}

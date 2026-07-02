@@ -33,3 +33,9 @@ func TestMemStoreSignaler(t *testing.T) {
 		return internal.NewMemStore()
 	})
 }
+
+func TestMemStoreCanceller(t *testing.T) {
+	storetest.RunCancellerContract(t, func() rerun.Canceller {
+		return internal.NewMemStore()
+	})
+}

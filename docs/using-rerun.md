@@ -202,17 +202,25 @@ engine.Deliver(ctx, "approval:123", "manager-approval", true)
 
 ## 7. Cancellation
 
-`Cancel` stops a run executing in this process — a parked `Sleep` or in-flight
-step unwinds and the run finishes with the `Cancelled` status:
+`Cancel` stops a run — a parked `Sleep` or a `ctx`-respecting step unwinds and
+the run finishes with the `Cancelled` status:
 
 ```go
-if err := engine.Cancel(ctx, "order-99"); err != nil {
-    // the run isn't running in this process (already finished, or on another node)
-}
+engine.Cancel(ctx, "order-99")
 ```
 
-Cancellation is in-process in v0.x; cancelling a run running on another node is
-future work.
+If the run is executing **in this process**, it's cancelled immediately. To
+cancel a run executing on **another node**, enable polling — every bundled
+backend records cancel requests durably (they implement `Canceller`):
+
+```go
+e := rerun.New(store, rerun.WithCancelPoll(time.Second))
+```
+
+Now `Cancel` on any engine records the request in the store, and the worker
+running the run notices it within the poll interval and unwinds — cross-process
+cancellation, eventual rather than instant. `WithCancelPoll` defaults to off, so
+a parked run stays free until you opt in.
 
 ---
 

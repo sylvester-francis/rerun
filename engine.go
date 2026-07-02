@@ -16,8 +16,8 @@ package rerun
 
 import (
 	"context"
-	"fmt"
 	"sync"
+	"time"
 )
 
 // Func is a registered workflow body.
@@ -37,6 +37,10 @@ type Engine struct {
 	// goroutine is using, so Cancel can unwind it. Guarded by cmu.
 	cmu     sync.Mutex
 	cancels map[string]context.CancelFunc
+
+	// cancelPoll is how often a running run checks the store for a cross-process
+	// cancel request; zero disables the check (in-process Cancel only).
+	cancelPoll time.Duration
 }
 
 // Opt configures an Engine at construction time.
@@ -67,6 +71,12 @@ func WithClock(c Clock) Opt { return func(e *Engine) { e.clock = c } }
 
 // WithObserver overrides the observability seam.
 func WithObserver(o Observer) Opt { return func(e *Engine) { e.obs = o } }
+
+// WithCancelPoll enables cross-process cancellation: each running run checks the
+// store for a cancel request every d (the store must implement Canceller). Zero,
+// the default, disables the check so a run parks for free and only in-process
+// Cancel applies. Cross-process cancellation is eventual, within one interval.
+func WithCancelPoll(d time.Duration) Opt { return func(e *Engine) { e.cancelPoll = d } }
 
 // Handle registers a workflow body under a name. It panics on a duplicate: two
 // workflows sharing a name is a build-time programmer error, not a runtime
@@ -104,20 +114,4 @@ func (e *Engine) unregister(runID string) {
 	e.cmu.Lock()
 	delete(e.cancels, runID)
 	e.cmu.Unlock()
-}
-
-// Cancel stops a run executing in this process: it cancels the context the
-// workflow runs under, so a parked Sleep or an in-flight step unwinds and the
-// run finishes Cancelled. It errors if the run is not running here — already
-// finished, never started, or owned by another process. Cancellation is
-// in-process only in v0.x; cross-process cancel is future work.
-func (e *Engine) Cancel(ctx context.Context, runID string) error {
-	e.cmu.Lock()
-	cancel, ok := e.cancels[runID]
-	e.cmu.Unlock()
-	if !ok {
-		return fmt.Errorf("rerun: run %s is not running in this process", runID)
-	}
-	cancel()
-	return nil
 }

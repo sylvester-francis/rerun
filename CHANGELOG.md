@@ -33,7 +33,9 @@ recovery.
 - Reliability helpers, all built on `Do`: `Retry` with `RetryPolicy` and
   `FixedBackoff`/`ExpBackoff` (backoff waits use the durable `Sleep`, so they
   survive a crash); `DoTimeout` for a per-step deadline whose outcome is
-  journaled; `Cancel` to stop an in-process run, with a new `Cancelled` status.
+  journaled; `Cancel` with a new `Cancelled` status — in-process by default, or
+  cross-process (eventual) via the optional `Canceller` store capability and
+  `WithCancelPoll`.
 - Part II hard problems: multi-process leasing (non-blocking try-lock
   `Guarder`), durable timers, external signals (`Signaler`, `Deliver`,
   `Wait[T]`) with a durable mailbox on all three backends, and safe versioning
@@ -46,8 +48,9 @@ recovery.
 ### Known limitations (v0.2 fast-follow)
 
 - No distributed scheduler: a sleeping run parks a goroutine rather than being
-  polled from the store, and `Cancel` reaches only a run executing in this
-  process. Cross-process cancellation lands with the scheduler.
+  polled from the store, so concurrent sleeps scale to thousands, not millions.
+  (Cross-process cancellation, which needs similar store polling, is available
+  opt-in via `WithCancelPoll`.)
 - The `postgres` and `sqlite` backends share the module, so importing only the
   core still pulls their (pure-Go) drivers into the module graph. Splitting
   backends into submodules is under consideration.

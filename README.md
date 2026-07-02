@@ -204,7 +204,7 @@ For multi-run and multi-process workloads, a few more primitives build on the sa
 |---|---|
 | `Wait[T](w, name)` / `Deliver(ctx, runID, name, v)` | Block on an external event (an approval, a webhook) and journal it, so it survives a crash. Needs a `Signaler` store. |
 | `Version(w, changeID, min, max)` | Pin an in-flight run to its original code path so a deploy that changes the workflow doesn't break it. |
-| `Cancel(ctx, runID)` | Stop a run executing in this process; it finishes `Cancelled`. |
+| `Cancel(ctx, runID)` | Stop a run — instantly if it's in this process, or cross-process (eventual) with `WithCancelPoll` + a `Canceller` store. It finishes `Cancelled`. |
 
 Everything else is an interface a backend implements, or an internal detail.
 
@@ -403,10 +403,9 @@ The same `Store` contract runs against all three backends — in-memory, SQLite 
 **Non-goals (deliberately not provided):**
 
 - **No distributed scheduler.** A sleeping run parks a cheap goroutine; that scales to thousands, not to a durable-timer service polling millions. `Incomplete` plus a due-before query is where that would attach — a planned `v0.2`.
-- **Cancellation is in-process.** `Cancel` reaches a run executing in this process; cancelling a run running on another node lands with the distributed scheduler in `v0.2`. (Signals *are* durable — all three backends implement `Signaler`.)
 - **Not a Temporal replacement.** `rerun` is the core idea — journal and replay — not the platform (UI, namespaces, cross-language SDKs, activity workers) around it.
 
-Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), run cancellation (`Cancel`), and typed results (`Return`/`Result`) are all built in — see [`docs/using-rerun.md`](docs/using-rerun.md).
+Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), typed results (`Return`/`Result`), durable signals, and run cancellation — in-process, or cross-process (eventual) via `WithCancelPoll` — are all built in. See [`docs/using-rerun.md`](docs/using-rerun.md).
 
 ## Documentation
 

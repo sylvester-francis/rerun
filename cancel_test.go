@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/sylvester-francis/rerun"
+	"github.com/sylvester-francis/rerun/internal"
 )
 
 func TestCancel_UnwindsParkedSleep(t *testing.T) {
@@ -35,9 +36,31 @@ func TestCancel_UnwindsParkedSleep(t *testing.T) {
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 
-func TestCancel_NotRunningErrors(t *testing.T) {
-	eng, _, _ := setup(t)
+func TestCancel_NoCancellerErrors(t *testing.T) {
+	// A store with no Canceller capability: cancelling a run that isn't running
+	// in this process has nowhere to record the request, so it errors.
+	eng := rerun.New(newMockStore())
 	if err := eng.Cancel(context.Background(), "nonexistent"); err == nil {
-		t.Fatal("Cancel of a run not running in this process should error")
+		t.Fatal("Cancel with no local run and no Canceller store should error")
 	}
+}
+
+func TestCancel_CrossProcess(t *testing.T) {
+	store := internal.NewMemStore()
+	clk := newFakeClock()
+	// Two engines over one store stand in for two processes; only A runs the run.
+	a := rerun.New(store, rerun.WithClock(clk), rerun.WithCancelPoll(5*time.Millisecond))
+	b := rerun.New(store, rerun.WithClock(clk))
+	wf := func(w *rerun.W) error { return rerun.Sleep(w, time.Hour) }
+	a.Handle("wf", wf)
+	b.Handle("wf", wf)
+
+	ctx := context.Background()
+	must(t, a.Start(ctx, "wf", "r1"))
+	clk.BlockUntil(1) // A's run is parked on the sleep
+
+	// The run isn't local to B, so Cancel records the request in the store; A's
+	// poller observes it and unwinds the run.
+	must(t, b.Cancel(ctx, "r1"))
+	waitStatus(t, store, "r1", rerun.Cancelled)
 }

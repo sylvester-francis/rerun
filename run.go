@@ -61,6 +61,12 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	e.register(r.ID, cancel)
 	defer e.unregister(r.ID)
 
+	// When cross-process cancellation is enabled and the store supports it, watch
+	// for a cancel request recorded by another process.
+	if c, ok := e.store.(Canceller); ok && e.cancelPoll > 0 {
+		go e.pollCancel(cctx, cancel, c, r.ID)
+	}
+
 	e.store.Finish(ctx, r.ID, Running)
 
 	logs, err := e.store.LoadLogs(ctx, r.ID)
