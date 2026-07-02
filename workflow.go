@@ -108,3 +108,15 @@ func Sleep(w *W, d time.Duration) error {
 		return w.ctx.Err()
 	}
 }
+
+// DoTimeout is Do with a per-step deadline: fn runs under a context that cancels
+// after d. Whatever fn returns — a value, its own error, or a deadline error if
+// it honors the context — is journaled as the step's outcome, so replay is
+// deterministic and a timed-out step is never silently retried into a success.
+func DoTimeout[T any](w *W, tag string, d time.Duration, fn func(context.Context) (T, error)) (T, error) {
+	return Do(w, tag, func(ctx context.Context) (T, error) {
+		cctx, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return fn(cctx)
+	})
+}

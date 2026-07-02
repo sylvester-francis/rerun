@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is `0.x` the public API may change between minor releases.
 
-## [0.1.0] - 2026-07-01
+## [0.1.0] - 2026-07-02
 
 Initial release: a lightweight durable execution engine with journal-and-replay
 recovery.
@@ -27,8 +27,13 @@ recovery.
   (`sqlite`, pure-Go via `modernc.org/sqlite`), and PostgreSQL
   (`postgres`, multi-process via `pg_try_advisory_lock` on a dedicated
   connection).
-- Workflow input: an optional seed passed to `Start`, journaled and read back
-  with `Input[T]`.
+- Workflow input and result: an optional seed passed to `Start` and read with
+  `Input[T]`; a value handed back with `Return[T]` and read with `Result[T]`;
+  the terminal error is now persisted rather than dropped.
+- Reliability helpers, all built on `Do`: `Retry` with `RetryPolicy` and
+  `FixedBackoff`/`ExpBackoff` (backoff waits use the durable `Sleep`, so they
+  survive a crash); `DoTimeout` for a per-step deadline whose outcome is
+  journaled; `Cancel` to stop an in-process run, with a new `Cancelled` status.
 - Part II hard problems: multi-process leasing (non-blocking try-lock
   `Guarder`), durable timers, external signals (`Signaler`, `Deliver`,
   `Wait[T]`), and safe versioning across deploys (`Version`).
@@ -39,11 +44,9 @@ recovery.
 
 ### Known limitations (v0.2 fast-follow)
 
-- Typed workflow results (`Result[T]`) and persisted terminal errors are not yet
-  provided; return a result today by journaling it as a final `Do` step and
-  reading it through the store.
-- No built-in retry policy, per-step timeouts, or run cancellation. The retry
-  pattern already works as a loop over `Do`.
+- No distributed scheduler: a sleeping run parks a goroutine rather than being
+  polled from the store. Related: `Cancel` is in-process only, and signals need
+  a `Signaler` store — only the in-memory backend implements one today.
 - The `postgres` and `sqlite` backends share the module, so importing only the
   core still pulls their (pure-Go) drivers into the module graph. Splitting
   backends into submodules is under consideration.

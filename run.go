@@ -17,7 +17,6 @@ package rerun
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // Start creates a Pending run and launches it in its own goroutine. It returns
@@ -34,7 +33,7 @@ func (e *Engine) Start(ctx context.Context, workflow, runID string, in ...any) e
 		if err != nil {
 			panic(fmt.Sprintf("rerun: marshal input for run %s: %v", runID, err))
 		}
-		if err := e.store.Append(ctx, runID, Log{Seq: -1, Tag: inputTag, Payload: b, At: e.clock.Now()}); err != nil {
+		if err := e.store.Append(ctx, runID, Log{Seq: inputSeq, Tag: inputTag, Payload: b, At: e.clock.Now()}); err != nil {
 			panic(fmt.Sprintf("rerun: journal input for run %s: %v", runID, err))
 		}
 	}
@@ -54,6 +53,14 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	}
 	defer release.Close()
 
+	// A cancellable context for the workflow, registered so Cancel can unwind
+	// this run. cctx is what steps and Sleep observe; ctx is kept for recording
+	// the terminal status, since Cancel cancels only cctx.
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	e.register(r.ID, cancel)
+	defer e.unregister(r.ID)
+
 	e.store.Finish(ctx, r.ID, Running)
 
 	logs, err := e.store.LoadLogs(ctx, r.ID)
@@ -62,25 +69,36 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 		return
 	}
 
-	// Separate the run's seed and other engine metadata from the positional step
-	// journal that replay matches against.
+	// Separate engine metadata (the seed at inputSeq, a terminal error at errSeq)
+	// from the positional step journal that replay matches against.
 	var input []byte
+	haveErr := false
 	steps := make([]Log, 0, len(logs))
 	for _, l := range logs {
-		if strings.HasPrefix(l.Tag, reservedPrefix) {
-			if l.Tag == inputTag {
+		if l.Seq < 0 {
+			switch l.Tag {
+			case inputTag:
 				input = l.Payload
+			case errorTag:
+				haveErr = true
 			}
 			continue
 		}
 		steps = append(steps, l)
 	}
 
-	w := &W{RunID: r.ID, logs: steps, input: input, replay: len(steps) > 0, eng: e, ctx: ctx}
+	w := &W{RunID: r.ID, logs: steps, input: input, replay: len(steps) > 0, eng: e, ctx: cctx}
 	fn := e.lookup(r.Workflow)
 	if werr := fn(w); werr != nil {
-		e.store.Finish(ctx, r.ID, Failed)
-		e.obs.OnFinish(r.ID, Failed)
+		status := Failed
+		if cctx.Err() != nil {
+			status = Cancelled // unwound by Cancel, not a business failure
+		} else if !haveErr {
+			// Record the terminal error once so Result can surface why it failed.
+			e.store.Append(ctx, r.ID, Log{Seq: errSeq, Tag: errorTag, Err: werr.Error(), At: e.clock.Now()})
+		}
+		e.store.Finish(ctx, r.ID, status)
+		e.obs.OnFinish(r.ID, status)
 		return
 	}
 	e.store.Finish(ctx, r.ID, Done)

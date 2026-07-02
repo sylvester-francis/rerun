@@ -162,7 +162,7 @@ func TestSleep_ContextCancelled(t *testing.T) {
 	must(t, eng.Start(ctx, "wf", "r1"))
 	clk.BlockUntil(1) // the sleep is parked
 	cancel()          // cancel while it waits
-	waitStatus(t, store, "r1", rerun.Failed)
+	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 
 func TestWithCodec_Applied(t *testing.T) {
@@ -204,6 +204,7 @@ func TestStatus_String(t *testing.T) {
 		rerun.Running:    "Running",
 		rerun.Done:       "Done",
 		rerun.Failed:     "Failed",
+		rerun.Cancelled:  "Cancelled",
 		rerun.Status(99): "Status(99)",
 	}
 	for s, want := range cases {
@@ -233,7 +234,7 @@ func TestWait_ContextCancelled(t *testing.T) {
 	must(t, eng.Start(ctx, "wf", "r1"))
 	time.Sleep(10 * time.Millisecond) // let Wait enter its poll loop
 	cancel()                          // cancel while it waits for a signal that never comes
-	waitStatus(t, store, "r1", rerun.Failed)
+	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 
 type spyCodec struct {

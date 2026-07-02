@@ -16,12 +16,16 @@ package rerun
 
 import "fmt"
 
-// reservedPrefix marks journal entries that are engine metadata rather than
-// workflow steps. exec separates them from the positional step journal, so a
-// run's seed does not shift the sequence numbers that replay matches against.
+// reservedPrefix marks journal entries and tags that are engine metadata rather
+// than workflow steps. Reserved metadata is journaled at a negative sequence
+// number, so exec can separate it from the positional step journal (seq >= 0)
+// that replay matches against — a run's seed never shifts step positions.
 const reservedPrefix = "rerun:"
 
-const inputTag = reservedPrefix + "input"
+const (
+	inputTag = reservedPrefix + "input"
+	inputSeq = -1
+)
 
 // Input returns the value passed to Start for this run, decoded as T. It is
 // journaled as the run's seed at Start, so replay sees the same value every

@@ -9,7 +9,7 @@
 ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝
 </pre>
 
-### ⟲ durable execution for Go &nbsp;·&nbsp; crash · restart · resume
+### ⟲ Durable execution for Go &nbsp;·&nbsp; crash · restart · resume
 
 **A multi-step process that runs to completion — even when the machine crashes halfway through and restarts hours later. It resumes from where it left off instead of starting over.**
 
@@ -193,8 +193,10 @@ The whole surface a user touches — small because the idea is small:
 | `Start(ctx, name, runID, in...)` | Launch a new run in its own goroutine, with an optional journaled input. |
 | `Recover(ctx)` | Re-launch every incomplete run after a restart. |
 | `Do[T](w, tag, fn)` | Run a step once; return its journaled value on replay. |
+| `DoTimeout[T](w, tag, d, fn)` | A `Do` with a per-step deadline; the timeout outcome is journaled. |
 | `Sleep(w, d)` | A durable delay that survives restarts and is skipped on replay. |
-| `Input[T](w)` | Read the value passed to `Start`, journaled as the run's seed. |
+| `Retry[T](w, tag, policy, fn)` | Retry a step with durable backoff; each attempt is its own journaled step. |
+| `Input[T](w)` / `Return[T](w, v)` / `Result[T](ctx, e, id)` | Pass a value into a run and hand one back, both journaled. |
 
 For multi-run and multi-process workloads, a few more primitives build on the same journal:
 
@@ -202,6 +204,7 @@ For multi-run and multi-process workloads, a few more primitives build on the sa
 |---|---|
 | `Wait[T](w, name)` / `Deliver(ctx, runID, name, v)` | Block on an external event (an approval, a webhook) and journal it, so it survives a crash. Needs a `Signaler` store. |
 | `Version(w, changeID, min, max)` | Pin an in-flight run to its original code path so a deploy that changes the workflow doesn't break it. |
+| `Cancel(ctx, runID)` | Stop a run executing in this process; it finishes `Cancelled`. |
 
 Everything else is an interface a backend implements, or an internal detail.
 
@@ -399,14 +402,16 @@ The same `Store` contract runs against all three backends — in-memory, SQLite 
 
 **Non-goals (deliberately not provided):**
 
-- **No built-in retry policy, per-step timeouts, or run cancellation.** The retry pattern already works as a loop over `Do`; timeouts build on `context` and durable `Sleep`. These are a planned `v0.2`, not launch blockers.
-- **No typed workflow result yet.** Return a value by journaling it as your final `Do` step and reading it back through the store; a first-class `Result[T]` is a `v0.2` fast-follow.
-- **No distributed scheduler.** A sleeping run parks a cheap goroutine; that scales to thousands, not to a durable-timer service polling millions. `Incomplete` plus a due-before query is where that would attach.
+- **No distributed scheduler.** A sleeping run parks a cheap goroutine; that scales to thousands, not to a durable-timer service polling millions. `Incomplete` plus a due-before query is where that would attach — a planned `v0.2`.
+- **Cancellation and signals are in-process / in-memory for now.** `Cancel` reaches a run executing in this process; `Wait`/`Deliver` need a `Signaler` store and only the in-memory one implements it today. Cross-process cancel and durable signals are `v0.2`.
 - **Not a Temporal replacement.** `rerun` is the core idea — journal and replay — not the platform (UI, namespaces, cross-language SDKs, activity workers) around it.
+
+Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), run cancellation (`Cancel`), and typed results (`Return`/`Result`) are all built in — see [`docs/using-rerun.md`](docs/using-rerun.md).
 
 ## Documentation
 
-- [`docs/durable-execution.md`](docs/durable-execution.md) — a concept-to-code tour of durable execution and this codebase; also an adoption on-ramp.
+- [`docs/using-rerun.md`](docs/using-rerun.md) — how to wire `rerun` into a real application: input/result, retries, timeouts, cancellation, signals, choosing a backend, and the rules you must follow.
+- [`docs/durable-execution.md`](docs/durable-execution.md) — a concept-to-code tour of durable execution and this codebase; the *why* behind the *how*.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`CHANGELOG.md`](CHANGELOG.md)
 - API reference on [pkg.go.dev](https://pkg.go.dev/github.com/sylvester-francis/rerun).
 

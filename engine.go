@@ -14,7 +14,11 @@
 
 package rerun
 
-import "sync"
+import (
+	"context"
+	"fmt"
+	"sync"
+)
 
 // Func is a registered workflow body.
 type Func func(w *W) error
@@ -28,6 +32,11 @@ type Engine struct {
 	obs   Observer
 	reg   map[string]Func
 	mu    sync.RWMutex
+
+	// cancels maps a running run to the cancel func of the context its exec
+	// goroutine is using, so Cancel can unwind it. Guarded by cmu.
+	cmu     sync.Mutex
+	cancels map[string]context.CancelFunc
 }
 
 // Opt configures an Engine at construction time.
@@ -37,11 +46,12 @@ type Opt func(*Engine)
 // no-op observer) before any options.
 func New(s Store, opts ...Opt) *Engine {
 	e := &Engine{
-		store: s,
-		codec: jsonCodec{},
-		clock: wall{},
-		obs:   noopObserver{},
-		reg:   make(map[string]Func),
+		store:   s,
+		codec:   jsonCodec{},
+		clock:   wall{},
+		obs:     noopObserver{},
+		reg:     make(map[string]Func),
+		cancels: make(map[string]context.CancelFunc),
 	}
 	for _, o := range opts {
 		o(e)
@@ -80,4 +90,34 @@ func (e *Engine) lookup(name string) Func {
 		panic("rerun: unknown workflow: " + name)
 	}
 	return fn
+}
+
+// register tracks a running run's cancel func so Cancel can reach it; unregister
+// clears it when the run finishes.
+func (e *Engine) register(runID string, cancel context.CancelFunc) {
+	e.cmu.Lock()
+	e.cancels[runID] = cancel
+	e.cmu.Unlock()
+}
+
+func (e *Engine) unregister(runID string) {
+	e.cmu.Lock()
+	delete(e.cancels, runID)
+	e.cmu.Unlock()
+}
+
+// Cancel stops a run executing in this process: it cancels the context the
+// workflow runs under, so a parked Sleep or an in-flight step unwinds and the
+// run finishes Cancelled. It errors if the run is not running here — already
+// finished, never started, or owned by another process. Cancellation is
+// in-process only in v0.x; cross-process cancel is future work.
+func (e *Engine) Cancel(ctx context.Context, runID string) error {
+	e.cmu.Lock()
+	cancel, ok := e.cancels[runID]
+	e.cmu.Unlock()
+	if !ok {
+		return fmt.Errorf("rerun: run %s is not running in this process", runID)
+	}
+	cancel()
+	return nil
 }

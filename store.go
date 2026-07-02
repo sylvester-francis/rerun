@@ -29,6 +29,9 @@ const (
 	Running
 	Done
 	Failed
+	// Cancelled is terminal, like Done and Failed. It is appended after Failed
+	// so the existing values keep their numbers in journals and databases.
+	Cancelled
 )
 
 func (s Status) String() string {
@@ -41,6 +44,8 @@ func (s Status) String() string {
 		return "Done"
 	case Failed:
 		return "Failed"
+	case Cancelled:
+		return "Cancelled"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
