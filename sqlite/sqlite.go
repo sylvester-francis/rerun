@@ -94,11 +94,24 @@ func migrate(db *sql.DB) error {
 		}
 	}
 	for i := v; i < len(migrations); i++ {
-		if _, err := db.Exec(migrations[i]); err != nil {
+		// DDL and its version row commit together (SQLite has transactional DDL),
+		// so a crash mid-migration rolls the DDL back and the migration re-runs
+		// cleanly — a partial apply can never brick the database. This matters
+		// because migration 2's ALTER TABLE ADD COLUMN is not idempotent.
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("migration %d: begin: %w", i+1, err)
+		}
+		if _, err := tx.Exec(migrations[i]); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
-		if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, i+1); err != nil {
+		if _, err := tx.Exec(`INSERT INTO schema_version (version) VALUES (?)`, i+1); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("record migration %d: %w", i+1, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("migration %d: commit: %w", i+1, err)
 		}
 	}
 	return nil
