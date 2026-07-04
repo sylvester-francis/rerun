@@ -69,12 +69,15 @@ type Log struct {
 	At      time.Time
 }
 
-// Run is the metadata for a single workflow instance.
+// Run is the metadata for a single workflow instance. Input is the optional
+// seed passed to Start, persisted atomically with the run's creation so a crash
+// can never separate a run from its input.
 type Run struct {
 	ID       string
 	Workflow string
 	Status   Status
 	Created  time.Time
+	Input    []byte
 }
 
 // Writer is the hot path: creating a run and appending step results as they

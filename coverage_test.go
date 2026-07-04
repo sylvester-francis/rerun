@@ -138,17 +138,6 @@ func TestDeliver_MarshalError(t *testing.T) {
 	}
 }
 
-func TestStart_InputMarshalPanics(t *testing.T) {
-	eng := rerun.New(internal.NewMemStore())
-	eng.Handle("wf", func(w *rerun.W) error { return nil })
-	defer func() {
-		if recover() == nil {
-			t.Fatal("Start with an unmarshalable input should panic")
-		}
-	}()
-	_ = eng.Start(context.Background(), "wf", "r1", make(chan int))
-}
-
 func TestInput_DecodeErrorFailsRun(t *testing.T) {
 	eng, store, _ := setup(t)
 	eng.Handle("wf", func(w *rerun.W) error {

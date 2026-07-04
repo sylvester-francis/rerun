@@ -29,18 +29,20 @@ func (e *Engine) Start(ctx context.Context, workflow, runID string, in ...any) e
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
-	r := Run{ID: runID, Workflow: workflow, Status: Pending, Created: e.clock.Now()}
-	if err := e.store.Create(ctx, r); err != nil {
-		return fmt.Errorf("rerun: create run %s: %w", runID, err)
-	}
+	e.lookup(workflow) // an unknown name at a Start call site is a programmer error: panic here, not later in the goroutine
+	var seed []byte
 	if len(in) > 0 && in[0] != nil {
 		b, err := e.codec.Marshal(in[0])
 		if err != nil {
-			panic(fmt.Sprintf("rerun: marshal input for run %s: %v", runID, err))
+			return fmt.Errorf("rerun: marshal input for run %s: %w", runID, err)
 		}
-		if err := e.store.Append(ctx, runID, Log{Seq: inputSeq, Tag: inputTag, Payload: b, At: e.clock.Now()}); err != nil {
-			panic(fmt.Sprintf("rerun: journal input for run %s: %v", runID, err))
-		}
+		seed = b
+	}
+	// The seed rides inside the Run record, so a run and its input are created in
+	// one atomic write — a crash can never leave a run without its input.
+	r := Run{ID: runID, Workflow: workflow, Status: Pending, Created: e.clock.Now(), Input: seed}
+	if err := e.store.Create(ctx, r); err != nil {
+		return fmt.Errorf("rerun: create run %s: %w", runID, err)
 	}
 	e.obs.OnStart(r)
 	e.spawn(r)
@@ -105,16 +107,20 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 		return // transient store failure: park, a later claim retries
 	}
 
-	// Separate engine metadata (the seed at inputSeq, a terminal error at errSeq)
-	// from the positional step journal that replay matches against.
-	var input []byte
+	// Separate engine metadata (a terminal error at errSeq) from the positional
+	// step journal that replay matches against. The seed rides in the Run record
+	// now; a legacy rerun:input journal row is only the v0.1 fallback and never
+	// overrides the atomic seed (the golden fixtures prove this path forever).
+	input := r.Input
 	haveErr := false
 	steps := make([]Log, 0, len(logs))
 	for _, l := range logs {
 		if l.Seq < 0 {
 			switch l.Tag {
 			case inputTag:
-				input = l.Payload
+				if input == nil {
+					input = l.Payload
+				}
 			case errorTag:
 				haveErr = true
 			}

@@ -190,6 +190,22 @@ func RunStoreContract(t *testing.T, makeStore func() rerun.Store) {
 			t.Fatalf("duplicate create = %v, want ErrRunExists", err)
 		}
 	})
+
+	t.Run("input round-trips through create and incomplete", func(t *testing.T) {
+		s := makeStore()
+		must(t, s.Create(ctx, rerun.Run{ID: "seeded", Workflow: "wf", Status: rerun.Pending, Created: time.Now(), Input: []byte(`"hello"`)}))
+		runs, err := s.Incomplete(ctx)
+		must(t, err)
+		for _, r := range runs {
+			if r.ID == "seeded" {
+				if string(r.Input) != `"hello"` {
+					t.Fatalf("input = %q, want \"hello\"", r.Input)
+				}
+				return
+			}
+		}
+		t.Fatal("seeded run not returned by Incomplete")
+	})
 }
 
 // RunSignalerContract exercises a rerun.Signaler mailbox: FIFO delivery, an
