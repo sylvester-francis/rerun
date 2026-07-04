@@ -154,14 +154,16 @@ func TestInput_DecodeErrorFailsRun(t *testing.T) {
 }
 
 func TestSleep_ContextCancelled(t *testing.T) {
+	// A run now outlives the caller's context (see
+	// TestStart_RunOutlivesCallerContext); its own context ends only via Cancel,
+	// which unwinds a parked Sleep into Cancelled.
 	eng, store, clk := setup(t)
 	eng.Handle("wf", func(w *rerun.W) error {
 		return rerun.Sleep(w, time.Hour)
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	must(t, eng.Start(ctx, "wf", "r1"))
+	must(t, eng.Start(context.Background(), "wf", "r1"))
 	clk.BlockUntil(1) // the sleep is parked
-	cancel()          // cancel while it waits
+	must(t, eng.Cancel(context.Background(), "r1"))
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 
@@ -225,15 +227,16 @@ func TestStart_CreateErrorReturns(t *testing.T) {
 }
 
 func TestWait_ContextCancelled(t *testing.T) {
+	// Wait unwinds when the run's context ends. Under engine-owned lifetimes that
+	// happens via Cancel, not the caller's context.
 	eng, store, _ := setup(t)
 	eng.Handle("wf", func(w *rerun.W) error {
 		_, err := rerun.Wait[bool](w, "never-arrives")
 		return err
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	must(t, eng.Start(ctx, "wf", "r1"))
+	must(t, eng.Start(context.Background(), "wf", "r1"))
 	time.Sleep(10 * time.Millisecond) // let Wait enter its poll loop
-	cancel()                          // cancel while it waits for a signal that never comes
+	must(t, eng.Cancel(context.Background(), "r1")) // cancel while it waits for a signal that never comes
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 

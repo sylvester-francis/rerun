@@ -14,7 +14,10 @@
 
 package rerun
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // StepError carries a failed step's tag and message so the failure survives
 // being journaled and is reconstructed identically on replay.
@@ -26,3 +29,6 @@ type StepError struct {
 func (e *StepError) Error() string {
 	return fmt.Sprintf("rerun: step %q: %s", e.Tag, e.Msg)
 }
+
+// ErrEngineClosed is returned by engine methods called after Shutdown.
+var ErrEngineClosed = errors.New("rerun: engine is shut down")

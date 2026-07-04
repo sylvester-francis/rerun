@@ -41,7 +41,7 @@ func (e *Engine) Cancel(ctx context.Context, runID string) error {
 	cancel, ok := e.cancels[runID]
 	e.cmu.Unlock()
 	if ok {
-		cancel()
+		cancel(errCancelRequested)
 		return nil
 	}
 	if c, ok := e.store.(Canceller); ok {
@@ -53,7 +53,7 @@ func (e *Engine) Cancel(ctx context.Context, runID string) error {
 // pollCancel watches the store for a cancel request and cancels the run's
 // context when one appears. It runs only when WithCancelPoll is set and the
 // store is a Canceller, and stops as soon as the run's context is done.
-func (e *Engine) pollCancel(cctx context.Context, cancel context.CancelFunc, c Canceller, runID string) {
+func (e *Engine) pollCancel(cctx context.Context, cancel context.CancelCauseFunc, c Canceller, runID string) {
 	t := time.NewTicker(e.cancelPoll)
 	defer t.Stop()
 	for {
@@ -62,7 +62,7 @@ func (e *Engine) pollCancel(cctx context.Context, cancel context.CancelFunc, c C
 			return
 		case <-t.C:
 			if req, err := c.CancelRequested(context.Background(), runID); err == nil && req {
-				cancel()
+				cancel(errCancelRequested)
 				return
 			}
 		}

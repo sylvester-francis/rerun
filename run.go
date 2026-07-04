@@ -16,6 +16,7 @@ package rerun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -24,6 +25,9 @@ import (
 // execution and one process can drive many thousands of runs. An optional input
 // is journaled as the run's seed and read back inside the workflow with Input.
 func (e *Engine) Start(ctx context.Context, workflow, runID string, in ...any) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
 	r := Run{ID: runID, Workflow: workflow, Status: Pending, Created: e.clock.Now()}
 	if err := e.store.Create(ctx, r); err != nil {
 		return fmt.Errorf("rerun: create run %s: %w", runID, err)
@@ -38,7 +42,7 @@ func (e *Engine) Start(ctx context.Context, workflow, runID string, in ...any) e
 		}
 	}
 	e.obs.OnStart(r)
-	go e.exec(ctx, r)
+	e.spawn(r)
 	return nil
 }
 
@@ -53,11 +57,12 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	}
 	defer release.Close()
 
-	// A cancellable context for the workflow, registered so Cancel can unwind
-	// this run. cctx is what steps and Sleep observe; ctx is kept for recording
-	// the terminal status, since Cancel cancels only cctx.
-	cctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// The run's signal context: cancelled by Engine.Cancel (with
+	// errCancelRequested) or by Shutdown via the engine root (errParked). ctx
+	// here is the engine root; the caller who started the run is long gone. ctx
+	// is kept for recording the terminal status, since a cancel unwinds cctx.
+	cctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	e.register(r.ID, cancel)
 	defer e.unregister(r.ID)
 
@@ -95,31 +100,43 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 
 	w := &W{RunID: r.ID, logs: steps, input: input, replay: len(steps) > 0, eng: e, ctx: cctx}
 	fn := e.lookup(r.Workflow)
-	if werr := fn(w); werr != nil {
-		status := Failed
-		if cctx.Err() != nil {
-			status = Cancelled // unwound by Cancel, not a business failure
-		} else if !haveErr {
+	werr := fn(w)
+	cause := context.Cause(cctx)
+	switch {
+	case werr == nil:
+		// A run that finished before noticing a cancel or shutdown is Done: its
+		// work is real and its journal is complete.
+		e.store.Finish(ctx, r.ID, Done)
+		e.obs.OnFinish(r.ID, Done)
+	case errors.Is(cause, errCancelRequested):
+		e.store.Finish(ctx, r.ID, Cancelled)
+		e.obs.OnFinish(r.ID, Cancelled)
+	case errors.Is(cause, errParked):
+		// Parking is crash-equivalent: no status write, the lease releases on
+		// return, and a later claim resumes from the journal.
+		return
+	default:
+		if !haveErr {
 			// Record the terminal error once so Result can surface why it failed.
 			e.store.Append(ctx, r.ID, Log{Seq: errSeq, Tag: errorTag, Err: werr.Error(), At: e.clock.Now()})
 		}
-		e.store.Finish(ctx, r.ID, status)
-		e.obs.OnFinish(r.ID, status)
-		return
+		e.store.Finish(ctx, r.ID, Failed)
+		e.obs.OnFinish(r.ID, Failed)
 	}
-	e.store.Finish(ctx, r.ID, Done)
-	e.obs.OnFinish(r.ID, Done)
 }
 
 // Recover relaunches every incomplete run through exec, resuming workflows a
 // process restart left in flight.
 func (e *Engine) Recover(ctx context.Context) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
 	runs, err := e.store.Incomplete(ctx)
 	if err != nil {
 		return fmt.Errorf("rerun: recover: %w", err)
 	}
 	for _, r := range runs {
-		go e.exec(ctx, r)
+		e.spawn(r)
 	}
 	return nil
 }
