@@ -152,6 +152,9 @@ func Sleep(w *W, d time.Duration) error {
 	case <-w.eng.clock.After(remaining):
 		return nil
 	case <-w.ctx.Done():
+		// The wait was interrupted by a cancel or park; record a fast-fail so a
+		// workflow that swallows this error is not read as a genuine completion.
+		w.fastFailed.Store(true)
 		return w.ctx.Err()
 	}
 }

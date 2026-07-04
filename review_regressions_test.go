@@ -117,3 +117,18 @@ func TestSleep_AfterCancelPropagatesError(t *testing.T) {
 	}
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }
+
+// A run cancelled while parked in a journaled Sleep's wait must finish Cancelled
+// even if the workflow swallows Sleep's returned error: the interrupted wait
+// counts as a fast-fail, so exec does not read the eventual nil as completion.
+func TestCancel_DuringSleepWaitSwallowedStillCancelled(t *testing.T) {
+	eng, store, clk := setup(t)
+	eng.Handle("wf", func(w *rerun.W) error {
+		_ = rerun.Sleep(w, time.Hour) // deliberately ignores the cancel error
+		return nil
+	})
+	must(t, eng.Start(context.Background(), "wf", "r1"))
+	clk.BlockUntil(1) // parked in the sleep's select
+	must(t, eng.Cancel(context.Background(), "r1"))
+	waitStatus(t, store, "r1", rerun.Cancelled)
+}
