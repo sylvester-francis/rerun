@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is `0.x` the public API may change between minor releases.
 
+For current limitations and things `rerun` deliberately does not do (yet), see
+[`KNOWN-ISSUES.md`](KNOWN-ISSUES.md).
+
+## [Unreleased]
+
+Nothing yet. The next release is **v0.3.0** (milestone M2 — Operable): a
+dispatcher, retention, inspection, and first-class observability. See the
+[open milestones](https://github.com/sylvester-francis/rerun/issues).
+
 ## [0.2.0] - 2026-07-04
 
 M1 — Correct under failure. `rerun` is now safe to run in production: runs are

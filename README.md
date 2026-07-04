@@ -20,7 +20,7 @@
 [![Status](https://img.shields.io/badge/status-v0.x%20unstable-orange)](#guarantees--non-goals)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-[**Docs & landing site**](https://sylvester-francis.github.io/rerun/) · [**API reference**](https://pkg.go.dev/github.com/sylvester-francis/rerun) · [**Guide**](docs/using-rerun.md)
+[**Docs & landing site**](https://sylvester-francis.github.io/rerun/) · [**API reference**](https://pkg.go.dev/github.com/sylvester-francis/rerun) · [**Guide**](docs/using-rerun.md) · [**Known issues**](KNOWN-ISSUES.md)
 
 `Do` · `Sleep` · `Recover` — that's the whole API.
 
