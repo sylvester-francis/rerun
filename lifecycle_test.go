@@ -17,6 +17,7 @@ package rerun_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,27 @@ import (
 	"github.com/sylvester-francis/rerun"
 	"github.com/sylvester-francis/rerun/internal"
 )
+
+// A Start racing Shutdown must not panic ("WaitGroup misuse: Add called
+// concurrently with Wait") or leak a run goroutine past Shutdown's drain: spawn
+// serializes its wg.Add with Shutdown's close. Stress the window many times.
+func TestShutdown_RacingStartIsSafe(t *testing.T) {
+	for range 300 {
+		eng := rerun.New(internal.NewMemStore())
+		eng.Handle("wf", func(w *rerun.W) error { return nil })
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = eng.Start(context.Background(), "wf", "r1")
+		}()
+		go func() {
+			defer wg.Done()
+			_ = eng.Shutdown(context.Background())
+		}()
+		wg.Wait()
+	}
+}
 
 // The defect this pins: a caller's context ending must not touch the run.
 func TestStart_RunOutlivesCallerContext(t *testing.T) {

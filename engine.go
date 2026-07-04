@@ -42,6 +42,10 @@ type Engine struct {
 	rootCancel context.CancelCauseFunc
 	wg         sync.WaitGroup
 	closed     atomic.Bool
+	// wgMu serializes spawn's closed-check + wg.Add against Shutdown's closed-set,
+	// so every Add happens-before Shutdown's wg.Wait (no "Add concurrent with
+	// Wait" panic) and no run is launched after Shutdown began draining.
+	wgMu sync.Mutex
 
 	// cancels maps a running run to the cause-aware cancel func of its exec
 	// context, so Cancel can unwind it with errCancelRequested. Guarded by cmu.
@@ -93,7 +97,10 @@ func New(s Store, opts ...Opt) *Engine {
 // incomplete in the store, and resume on a later engine), and Shutdown waits
 // for the run goroutines to return or ctx to expire.
 func (e *Engine) Shutdown(ctx context.Context) error {
-	if !e.closed.CompareAndSwap(false, true) {
+	e.wgMu.Lock()
+	first := e.closed.CompareAndSwap(false, true)
+	e.wgMu.Unlock()
+	if !first {
 		return nil
 	}
 	e.rootCancel(errParked)
@@ -108,9 +115,15 @@ func (e *Engine) Shutdown(ctx context.Context) error {
 }
 
 // spawn runs exec on its own goroutine under the engine root. Every run
-// goroutine — Start, Recover, Redrive — must go through spawn so Shutdown
-// can account for it.
+// goroutine — Start, Recover, Redrive — must go through spawn so Shutdown can
+// account for it. It refuses to launch once the engine is closing (the run stays
+// durably created for a later Recover) so no goroutine escapes Shutdown's wait.
 func (e *Engine) spawn(r Run) {
+	e.wgMu.Lock()
+	defer e.wgMu.Unlock()
+	if e.closed.Load() {
+		return
+	}
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
