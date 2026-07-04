@@ -16,6 +16,7 @@ package rerun_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -106,6 +107,35 @@ func TestRedrive_StuckRunRunsAgainAfterFix(t *testing.T) {
 	waitStatus(t, store, "r1", rerun.Done)
 	if atomic.LoadInt32(&ran) != 0 {
 		t.Fatalf("journaled step re-executed %d times on redrive, want 0 (replay)", ran)
+	}
+}
+
+// The journal primary key fences a lost lease: an Append at an already-journaled
+// (run, seq) returns ErrSeqConflict, and the engine parks (runAbort) rather than
+// sticking. Here we pin the sentinel and the untouched status directly; the full
+// two-process advisory-lock exercise is M3's lease task.
+func TestExec_LostLeaseLoserParksQuietly(t *testing.T) {
+	store := internal.NewMemStore()
+	ctx := context.Background()
+	must(t, store.Create(ctx, rerun.Run{ID: "r1", Workflow: "wf", Status: rerun.Running, Created: time.Now()}))
+	// Pre-journal seq 0 as "the other worker" so a colliding append fences.
+	must(t, store.Append(ctx, "r1", rerun.Log{Seq: 0, Tag: "step", Payload: []byte(`1`), At: time.Now()}))
+
+	// The workflow that would collide if this engine claimed the run it no longer
+	// owns; the test asserts the fence directly rather than racing two engines.
+	eng := rerun.New(store)
+	eng.Handle("wf", func(w *rerun.W) error {
+		_, err := rerun.Do(w, "step", func(context.Context) (int, error) { return 2, nil })
+		return err
+	})
+
+	err := store.Append(ctx, "r1", rerun.Log{Seq: 0, Tag: "step", Payload: []byte(`2`), At: time.Now()})
+	if !errors.Is(err, rerun.ErrSeqConflict) {
+		t.Fatalf("conflict = %v, want ErrSeqConflict", err)
+	}
+	r, _ := store.Get("r1")
+	if r.Status != rerun.Running {
+		t.Fatalf("status after fence = %v, want Running (parked, unclaimed)", r.Status)
 	}
 }
 

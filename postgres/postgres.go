@@ -22,14 +22,23 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 
 	"github.com/sylvester-francis/rerun"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
+
+// isUnique reports whether err is a Postgres unique-violation (SQLSTATE 23505)
+// on the named constraint, so Create and Append can map the driver's typed
+// error onto rerun's sentinels without string matching.
+func isUnique(err error, constraint string) bool {
+	var pe *pq.Error
+	return errors.As(err, &pe) && pe.Code == "23505" && pe.Constraint == constraint
+}
 
 // Store is a Postgres-backed rerun.Store.
 type Store struct {
@@ -80,6 +89,9 @@ func (s *Store) Create(ctx context.Context, r rerun.Run) error {
 		r.ID, r.Workflow, int(r.Status), r.Created,
 	)
 	if err != nil {
+		if isUnique(err, "runs_pkey") {
+			return fmt.Errorf("postgres: create %s: %w", r.ID, rerun.ErrRunExists)
+		}
 		return fmt.Errorf("postgres: create %s: %w", r.ID, err)
 	}
 	return nil
@@ -91,6 +103,9 @@ func (s *Store) Append(ctx context.Context, runID string, l rerun.Log) error {
 		runID, l.Seq, l.Tag, l.Payload, l.Err, l.At,
 	)
 	if err != nil {
+		if isUnique(err, "journal_pkey") {
+			return fmt.Errorf("postgres: append %s seq %d: %w", runID, l.Seq, rerun.ErrSeqConflict)
+		}
 		return fmt.Errorf("postgres: append %s seq %d: %w", runID, l.Seq, err)
 	}
 	return nil

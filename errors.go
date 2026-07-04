@@ -32,3 +32,12 @@ func (e *StepError) Error() string {
 
 // ErrEngineClosed is returned by engine methods called after Shutdown.
 var ErrEngineClosed = errors.New("rerun: engine is shut down")
+
+// ErrRunExists reports a Create for a run ID the store already has — the signal
+// Start callers use to dedupe retried requests.
+var ErrRunExists = errors.New("rerun: run already exists")
+
+// ErrSeqConflict reports an Append at a (run, seq) position that is already
+// journaled: another worker owns the run (a lost lease) or the code shrank. The
+// engine parks the run when it sees this.
+var ErrSeqConflict = errors.New("rerun: journal sequence conflict")

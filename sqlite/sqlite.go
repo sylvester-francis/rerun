@@ -22,16 +22,19 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/sylvester-francis/rerun"
 	_ "modernc.org/sqlite"
 )
 
-// Store is a SQLite-backed rerun.Store. The mutex backs Guarder's try-lock.
+// Store is a SQLite-backed rerun.Store. The mutex guards a per-run held set that
+// backs Guarder's try-lock, so distinct runs lease independently.
 type Store struct {
-	db *sql.DB
-	mu sync.Mutex
+	db   *sql.DB
+	mu   sync.Mutex
+	held map[string]bool
 }
 
 // New opens (or creates) the database at path and ensures the schema exists.
@@ -74,7 +77,7 @@ func New(path string) *Store {
 		CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`); err != nil {
 		panic(fmt.Sprintf("sqlite: schema: %v", err))
 	}
-	return &Store{db: db}
+	return &Store{db: db, held: make(map[string]bool)}
 }
 
 func (s *Store) Create(ctx context.Context, r rerun.Run) error {
@@ -83,6 +86,9 @@ func (s *Store) Create(ctx context.Context, r rerun.Run) error {
 		r.ID, r.Workflow, int(r.Status), r.Created,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: runs.id") {
+			return fmt.Errorf("sqlite: create %s: %w", r.ID, rerun.ErrRunExists)
+		}
 		return fmt.Errorf("sqlite: create %s: %w", r.ID, err)
 	}
 	return nil
@@ -94,6 +100,9 @@ func (s *Store) Append(ctx context.Context, runID string, l rerun.Log) error {
 		runID, l.Seq, l.Tag, l.Payload, l.Err, l.At,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: journal.") {
+			return fmt.Errorf("sqlite: append %s seq %d: %w", runID, l.Seq, rerun.ErrSeqConflict)
+		}
 		return fmt.Errorf("sqlite: append %s seq %d: %w", runID, l.Seq, err)
 	}
 	return nil
@@ -153,15 +162,24 @@ func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	return out, rows.Err()
 }
 
-// Acquire is a non-blocking try-lock. SQLite is a single-writer database, so one
-// mutex is the whole lease: a second Acquire while held reports acquired=false
-// rather than blocking. A distributed backend replaces exactly this method with
-// a cross-process lock (see the postgres package) and nothing else changes.
+// Acquire is a non-blocking, per-run try-lock over an in-process held set.
+// SQLite's single-writer I/O is already serialized by the connection cap; the
+// lease's only job is run-level mutual exclusion, so distinct runs lease
+// independently. Two *processes* sharing one SQLite file are not supported for
+// execution — that is what the postgres backend is for — and the journal primary
+// key fences the unsupported case.
 func (s *Store) Acquire(ctx context.Context, runID string) (io.Closer, bool, error) {
-	if !s.mu.TryLock() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held[runID] {
 		return nil, false, nil
 	}
-	return closerFunc(s.mu.Unlock), true, nil
+	s.held[runID] = true
+	return closerFunc(func() {
+		s.mu.Lock()
+		delete(s.held, runID)
+		s.mu.Unlock()
+	}), true, nil
 }
 
 // PushSignal and PopSignal implement rerun.Signaler: a durable, per-run,
