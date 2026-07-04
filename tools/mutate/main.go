@@ -85,6 +85,27 @@ var mutants = []mutant{
 		new:    "\tv, err := fn(w.ctx)",
 		expect: equivalent, reason: "redundant: seq < len(logs) already gates replay",
 	},
+	{
+		name: "fast-fail guard removed", file: "workflow.go",
+		old:    "\tif w.ctx.Err() != nil {\n\t\tvar zero T\n\t\treturn zero, w.ctx.Err()\n\t}",
+		new:    "",
+		expect: mustKill, reason: "TestDo_PostCancelFastFailsWithCanceled",
+	},
+	{
+		// Anchored on the comment tail because a comment sits between the case
+		// and its return; the mutant inserts a terminal write, so a parked run
+		// would be marked Cancelled.
+		name: "park treated as cancel", file: "run.go",
+		old:    "\t\t// return, and a later claim resumes from the journal.\n\t\treturn",
+		new:    "\t\t// return, and a later claim resumes from the journal.\n\t\te.store.Finish(pctx, r.ID, Cancelled)\n\t\treturn",
+		expect: mustKill, reason: "TestShutdown_ParksInFlightRuns",
+	},
+	{
+		name: "claim-time cancel check inverted", file: "run.go",
+		old:    "if req, cerr := c.CancelRequested(ctx, r.ID); cerr == nil && req {",
+		new:    "if req, cerr := c.CancelRequested(ctx, r.ID); cerr == nil && !req {",
+		expect: mustKill, reason: "TestCancel_SurvivesRestartViaClaimCheck",
+	},
 }
 
 // suitePasses runs the core unit suite and reports whether it stayed green.

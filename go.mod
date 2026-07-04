@@ -2,9 +2,6 @@ module github.com/sylvester-francis/rerun
 
 go 1.25.0
 
-// The sqlite backend will require modernc.org/sqlite (pure Go, zero CGO)
-// once implemented. Run `go mod tidy` after wiring it up.
-
 require (
 	github.com/lib/pq v1.10.9
 	modernc.org/sqlite v1.53.0

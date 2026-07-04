@@ -222,6 +222,12 @@ running the run notices it within the poll interval and unwinds — cross-proces
 cancellation, eventual rather than instant. `WithCancelPoll` defaults to off, so
 a parked run stays free until you opt in.
 
+Even with polling off, a cancel is **durable** when the store implements
+`Canceller`: `Cancel` records the request before unwinding the local run, so any
+later claim of that run — after a restart, say — sees the request and finishes it
+`Cancelled` without ever executing the workflow. A cancel that has landed cannot
+be lost to a crash.
+
 ---
 
 ## 8. Versioning across deploys
