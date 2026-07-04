@@ -69,10 +69,10 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	e.register(r.ID, cancel)
 	defer e.unregister(r.ID)
 
-	// Terminal writes are detached from the run's cancellation: a cancel must
-	// never lose the record of a run that already reached a terminal outcome.
-	pctx, pdone := e.pctx(ctx)
-	defer pdone()
+	// Every terminal write below gets a persistence context created at the write,
+	// not at exec entry: a body that runs longer than the store timeout must not
+	// record its status against an already-expired deadline. pctx also detaches
+	// from the run's cancellation so a cancel cannot lose a terminal record.
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -81,6 +81,8 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 			}
 			// A programmer error (determinism, corruption, marshal). Keep the
 			// message loud, but confine the blast radius to this run.
+			pctx, pdone := e.pctx(ctx)
+			defer pdone()
 			e.store.Finish(pctx, r.ID, Stuck)
 			e.obs.OnFinish(r.ID, Stuck)
 			_ = fmt.Sprintf("rerun: run %s stuck: %v\n%s", r.ID, p, debug.Stack()) // replaced by real logging in M2
@@ -92,6 +94,8 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	// finished at the next claim without ever re-running the workflow.
 	if c, ok := e.store.(Canceller); ok {
 		if req, cerr := c.CancelRequested(ctx, r.ID); cerr == nil && req {
+			pctx, pdone := e.pctx(ctx)
+			defer pdone()
 			e.store.Finish(pctx, r.ID, Cancelled)
 			e.obs.OnFinish(r.ID, Cancelled)
 			return
@@ -143,8 +147,13 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	w := &W{RunID: r.ID, logs: steps, input: input, replay: len(steps) > 0, eng: e, ctx: cctx}
 	werr := fn(w)
 	cause := context.Cause(cctx)
+	pctx, pdone := e.pctx(ctx)
+	defer pdone()
 	switch {
-	case werr == nil:
+	case werr == nil && !w.fastFailed.Load():
+		// Genuinely completed: every step ran to completion, none fast-failed
+		// against a dead context. A cancel or shutdown that merely raced the final
+		// return loses here — the work is real and the journal is complete.
 		if w.seq < len(w.logs) {
 			panic(fmt.Sprintf(
 				"rerun: run %s returned with %d unconsumed journal entries (next seq %d): the workflow shrank; gate the change with Version",
@@ -153,13 +162,14 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 		}
 		e.store.Finish(pctx, r.ID, Done)
 		e.obs.OnFinish(r.ID, Done)
+	case errors.Is(cause, errParked):
+		// Parking is crash-equivalent: no status write, the lease releases on
+		// return, and a later claim resumes from the journal. A workflow that
+		// returned nil only because a step fast-failed under shutdown lands here.
+		return
 	case errors.Is(cause, errCancelRequested):
 		e.store.Finish(pctx, r.ID, Cancelled)
 		e.obs.OnFinish(r.ID, Cancelled)
-	case errors.Is(cause, errParked):
-		// Parking is crash-equivalent: no status write, the lease releases on
-		// return, and a later claim resumes from the journal.
-		return
 	default:
 		if !haveErr {
 			// Record the terminal error once so Result can surface why it failed.

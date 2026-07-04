@@ -37,6 +37,12 @@ type W struct {
 	// inStep is set while a Do/step is in flight. A workflow body is
 	// single-threaded; a second concurrent Do panics rather than corrupting seq.
 	inStep atomic.Bool
+
+	// fastFailed records that a step returned early because the run's context was
+	// already dead (a cancel or park). exec uses it so a workflow that returns nil
+	// only because a helper swallowed that error (Sleep, Return) is not mistaken
+	// for a genuine completion.
+	fastFailed atomic.Bool
 }
 
 // Do runs a step exactly once. On the first run it executes fn, journals the
@@ -88,8 +94,10 @@ func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, 
 	// Fast-fail once the run is cancelled or parked: executing new work against a
 	// dead context helps nobody, and journaling it would race the run's terminal
 	// status. Nothing is journaled — if the run is ever resumed (park), the step
-	// simply runs then.
+	// simply runs then. Record that we fast-failed so exec does not read the
+	// eventual nil return as a genuine completion.
 	if w.ctx.Err() != nil {
+		w.fastFailed.Store(true)
 		var zero T
 		return zero, w.ctx.Err()
 	}
@@ -128,9 +136,14 @@ func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, 
 // function of the deadline and the clock, so it is always recomputed, never
 // stored.
 func Sleep(w *W, d time.Duration) error {
-	deadline, _ := Do(w, fmt.Sprintf("sleep:%v", d), func(context.Context) (int64, error) {
+	deadline, err := Do(w, fmt.Sprintf("sleep:%v", d), func(context.Context) (int64, error) {
 		return w.eng.clock.Now().Add(d).UnixNano(), nil
 	})
+	if err != nil {
+		// The deadline step fast-failed (the run is cancelled or parked); propagate
+		// it rather than returning nil and reporting the sleep as complete.
+		return err
+	}
 	remaining := time.Unix(0, deadline).Sub(w.eng.clock.Now())
 	if remaining <= 0 {
 		return nil
