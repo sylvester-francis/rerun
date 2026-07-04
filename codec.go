@@ -16,6 +16,9 @@ package rerun
 
 import "encoding/json"
 
+// Codec is the serialization seam: how a step's result and a run's input are
+// encoded to and decoded from the journal. The default is JSON; override it with
+// WithCodec (for example to compress or encrypt payloads).
 type Codec interface {
 	Marshal(v any) ([]byte, error)
 	Unmarshal(data []byte, v any) error

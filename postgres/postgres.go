@@ -140,6 +140,7 @@ func New(dsn string) *Store {
 	return &Store{db: db}
 }
 
+// Create inserts a new run row, returning rerun.ErrRunExists on a duplicate ID.
 func (s *Store) Create(ctx context.Context, r rerun.Run) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO runs (id, workflow, status, created, input) VALUES ($1, $2, $3, $4, $5)`,
@@ -154,6 +155,8 @@ func (s *Store) Create(ctx context.Context, r rerun.Run) error {
 	return nil
 }
 
+// Append inserts a journal row, returning rerun.ErrSeqConflict on a duplicate
+// (run, seq) position.
 func (s *Store) Append(ctx context.Context, runID string, l rerun.Log) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO journal (run_id, seq, tag, payload, err, at) VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -168,6 +171,7 @@ func (s *Store) Append(ctx context.Context, runID string, l rerun.Log) error {
 	return nil
 }
 
+// Finish updates a run's status.
 func (s *Store) Finish(ctx context.Context, runID string, st rerun.Status) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status = $1 WHERE id = $2`, int(st), runID)
 	if err != nil {
@@ -176,6 +180,7 @@ func (s *Store) Finish(ctx context.Context, runID string, st rerun.Status) error
 	return nil
 }
 
+// LoadLogs returns a run's journal entries ordered by sequence.
 func (s *Store) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error) {
 	// ORDER BY seq is load-bearing: replay matches journal entries to Do calls
 	// by position, so rows must return in sequence order.
@@ -199,6 +204,7 @@ func (s *Store) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error)
 	return out, rows.Err()
 }
 
+// Incomplete returns every run still Pending or Running.
 func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, workflow, status, created, input FROM runs WHERE status IN ($1, $2)`,
@@ -256,6 +262,7 @@ func (s *Store) PushSignal(ctx context.Context, runID, name string, payload []by
 	return nil
 }
 
+// PopSignal removes and returns the oldest queued signal for (runID, name).
 func (s *Store) PopSignal(ctx context.Context, runID, name string) ([]byte, bool, error) {
 	// Delete-and-return the oldest matching signal in one statement. FOR UPDATE
 	// SKIP LOCKED keeps concurrent poppers from taking the same row.
@@ -285,6 +292,7 @@ func (s *Store) RequestCancel(ctx context.Context, runID string) error {
 	return nil
 }
 
+// CancelRequested reports whether a cancel has been recorded for the run.
 func (s *Store) CancelRequested(ctx context.Context, runID string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx,

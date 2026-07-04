@@ -1,16 +1,21 @@
 # rerun — developer workflow targets.
 #
-#   make            vet + race tests + mutation gate (the local bar)
+#   make            vet + lint + race tests + mutation gate + doc-check (local bar)
 #   make test       go test ./...
 #   make race       go test -race ./...
 #   make vet        go vet ./...
+#   make lint       gofmt cleanliness + staticcheck
+#   make doc-check  fail on any undocumented exported symbol
 #   make cover      coverage summary
-#   make mutate     mutation gate (5 killed, 1 documented equivalent)
+#   make mutate     mutation gate (9 killed, 1 documented equivalent)
 #   make pg-test    Postgres store contract against an ephemeral container
 
-.PHONY: all test race vet cover mutate pg-test
+# Pinned so CI and local runs agree; staticcheck is a tool, not a module dependency.
+STATICCHECK_VERSION ?= 2025.1.1
 
-all: vet race mutate
+.PHONY: all test race vet lint doc-check cover mutate pg-test
+
+all: vet lint race mutate doc-check
 
 test:
 	go test ./...
@@ -20,6 +25,19 @@ race:
 
 vet:
 	go vet ./...
+
+# Formatting and static-analysis gate: gofmt must be clean and staticcheck must
+# pass. rerun's comments and docs use Unicode (em dashes, mermaid, the banner),
+# so there is deliberately no ASCII-only gate.
+lint:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then echo "gofmt needed:"; echo "$$unformatted"; exit 1; fi; \
+	echo "gofmt: ok"
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+
+# Fail on any undocumented exported symbol (std-lib AST walker, no deps).
+doc-check:
+	go run ./tools/doccheck .
 
 cover:
 	go test -cover ./...

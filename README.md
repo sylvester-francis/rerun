@@ -13,12 +13,14 @@
 
 **A multi-step process that runs to completion — even when the machine crashes halfway through and restarts hours later. It resumes from where it left off instead of starting over.**
 
+[![CI](https://github.com/sylvester-francis/rerun/actions/workflows/ci.yml/badge.svg)](https://github.com/sylvester-francis/rerun/actions/workflows/ci.yml)
 [![Go Reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/sylvester-francis/rerun)
 [![Go Version](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
-[![Tests](https://img.shields.io/badge/go%20test-race-44cc11)](#testing)
 [![Core deps](https://img.shields.io/badge/core%20deps-0-success)](#design)
 [![Status](https://img.shields.io/badge/status-v0.x%20unstable-orange)](#guarantees--non-goals)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
+[**Docs & landing site**](https://sylvester-francis.github.io/rerun/) · [**API reference**](https://pkg.go.dev/github.com/sylvester-francis/rerun) · [**Guide**](docs/using-rerun.md)
 
 `Do` · `Sleep` · `Recover` — that's the whole API.
 
@@ -188,9 +190,9 @@ The whole surface a user touches — small because the idea is small:
 | Symbol | What it's for |
 |---|---|
 | `New(store, ...Opt)` | Build an engine over a `Store`. |
-| `WithCodec` / `WithClock` / `WithObserver` | Functional options for serialization, time, and lifecycle events. |
+| `WithCodec` / `WithClock` / `WithObserver` / `WithStoreTimeout` | Functional options for serialization, time, lifecycle events, and the store-write timeout. |
 | `Handle(name, fn)` | Register a workflow function. |
-| `Start(ctx, name, runID, in...)` | Launch a new run in its own goroutine, with an optional journaled input. |
+| `Start(ctx, name, runID, in...)` | Launch a new run in its own goroutine, with an optional atomic input. |
 | `Recover(ctx)` | Re-launch every incomplete run after a restart. |
 | `Do[T](w, tag, fn)` | Run a step once; return its journaled value on replay. |
 | `DoTimeout[T](w, tag, d, fn)` | A `Do` with a per-step deadline; the timeout outcome is journaled. |
@@ -204,7 +206,9 @@ For multi-run and multi-process workloads, a few more primitives build on the sa
 |---|---|
 | `Wait[T](w, name)` / `Deliver(ctx, runID, name, v)` | Block on an external event (an approval, a webhook) and journal it, so it survives a crash. Needs a `Signaler` store. |
 | `Version(w, changeID, min, max)` | Pin an in-flight run to its original code path so a deploy that changes the workflow doesn't break it. |
-| `Cancel(ctx, runID)` | Stop a run — instantly if it's in this process, or cross-process (eventual) with `WithCancelPoll` + a `Canceller` store. It finishes `Cancelled`. |
+| `Cancel(ctx, runID)` | Stop a run — instantly if it's in this process, or cross-process (eventual) with `WithCancelPoll` + a `Canceller` store. Durable when the store records it; finishes `Cancelled`. |
+| `Shutdown(ctx)` | Park every in-flight run and refuse new work, so a graceful stop loses nothing — runs stay incomplete and resume on the next `Recover`. |
+| `Redrive(ctx, runID)` | Reset a `Stuck` run to `Pending` after shipping a fix, so the next `Recover` claims it again. |
 
 Everything else is an interface a backend implements, or an internal detail.
 
