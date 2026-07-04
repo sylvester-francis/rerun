@@ -17,6 +17,8 @@ package rerun
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +33,16 @@ type W struct {
 	replay bool
 	eng    *Engine
 	ctx    context.Context
+
+	// inStep is set while a Do/step is in flight. A workflow body is
+	// single-threaded; a second concurrent Do panics rather than corrupting seq.
+	inStep atomic.Bool
+
+	// fastFailed records that a step returned early because the run's context was
+	// already dead (a cancel or park). exec uses it so a workflow that returns nil
+	// only because a helper swallowed that error (Sleep, Return) is not mistaken
+	// for a genuine completion.
+	fastFailed atomic.Bool
 }
 
 // Do runs a step exactly once. On the first run it executes fn, journals the
@@ -39,6 +51,19 @@ type W struct {
 // workflow is no longer deterministic, and every later positional match would
 // be meaningless.
 func Do[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, error) {
+	if strings.HasPrefix(tag, reservedPrefix) {
+		panic(fmt.Sprintf("rerun: tag %q uses the reserved %q prefix", tag, reservedPrefix))
+	}
+	return doStep(w, tag, fn)
+}
+
+// doStep is Do without the reserved-prefix check, for the engine's own
+// journaled values (Return). Everything else about a step is identical.
+func doStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, error) {
+	if !w.inStep.CompareAndSwap(false, true) {
+		panic("rerun: concurrent Do on one workflow: workflow bodies are single-threaded; run concurrent work inside a single Do")
+	}
+	defer w.inStep.Store(false)
 	if w.replay && w.seq < len(w.logs) {
 		return replayStep[T](w, tag)
 	}
@@ -66,6 +91,16 @@ func replayStep[T any](w *W, tag string) (T, error) {
 }
 
 func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, error) {
+	// Fast-fail once the run is cancelled or parked: executing new work against a
+	// dead context helps nobody, and journaling it would race the run's terminal
+	// status. Nothing is journaled — if the run is ever resumed (park), the step
+	// simply runs then. Record that we fast-failed so exec does not read the
+	// eventual nil return as a genuine completion.
+	if w.ctx.Err() != nil {
+		w.fastFailed.Store(true)
+		var zero T
+		return zero, w.ctx.Err()
+	}
 	w.replay = false
 	v, err := fn(w.ctx)
 
@@ -78,8 +113,15 @@ func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, 
 		errStr = err.Error()
 	}
 	l := Log{Seq: w.seq, Tag: tag, Payload: b, Err: errStr, At: w.eng.clock.Now()}
-	if serr := w.eng.store.Append(w.ctx, w.RunID, l); serr != nil {
-		panic(fmt.Sprintf("rerun: journal write failed at seq %d in run %s: %v", w.seq, w.RunID, serr))
+	// The journal write is detached from the run's cancellation: a step that
+	// already ran must be recorded even if a cancel landed mid-flight.
+	pctx, done := w.eng.pctx(w.ctx)
+	defer done()
+	if serr := w.eng.store.Append(pctx, w.RunID, l); serr != nil {
+		// The step's effect happened but its record did not land. Stop this run
+		// here (at-least-once: the step re-executes on a later claim) rather than
+		// kill the process or fabricate progress.
+		panic(runAbort{cause: fmt.Errorf("rerun: journal write failed at seq %d in run %s: %w", w.seq, w.RunID, serr)})
 	}
 	w.eng.obs.OnStep(w.RunID, l)
 
@@ -94,9 +136,14 @@ func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, 
 // function of the deadline and the clock, so it is always recomputed, never
 // stored.
 func Sleep(w *W, d time.Duration) error {
-	deadline, _ := Do(w, fmt.Sprintf("sleep:%v", d), func(context.Context) (int64, error) {
+	deadline, err := Do(w, fmt.Sprintf("sleep:%v", d), func(context.Context) (int64, error) {
 		return w.eng.clock.Now().Add(d).UnixNano(), nil
 	})
+	if err != nil {
+		// The deadline step fast-failed (the run is cancelled or parked); propagate
+		// it rather than returning nil and reporting the sleep as complete.
+		return err
+	}
 	remaining := time.Unix(0, deadline).Sub(w.eng.clock.Now())
 	if remaining <= 0 {
 		return nil
@@ -105,6 +152,9 @@ func Sleep(w *W, d time.Duration) error {
 	case <-w.eng.clock.After(remaining):
 		return nil
 	case <-w.ctx.Done():
+		// The wait was interrupted by a cancel or park; record a fast-fail so a
+		// workflow that swallows this error is not read as a genuine completion.
+		w.fastFailed.Store(true)
 		return w.ctx.Err()
 	}
 }

@@ -22,10 +22,10 @@ import "fmt"
 // that replay matches against — a run's seed never shifts step positions.
 const reservedPrefix = "rerun:"
 
-const (
-	inputTag = reservedPrefix + "input"
-	inputSeq = -1
-)
+// inputTag names the legacy v0.1 seed journal row. New runs carry the seed in
+// Run.Input; exec still reads this row as the recovery fallback for v0.1
+// databases (see the golden fixtures).
+const inputTag = reservedPrefix + "input"
 
 // Input returns the value passed to Start for this run, decoded as T. It is
 // journaled as the run's seed at Start, so replay sees the same value every

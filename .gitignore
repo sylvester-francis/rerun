@@ -6,5 +6,9 @@
 *.db-shm
 *.db-wal
 
+# ...but the committed v0.1 golden journal fixtures are the deliberate exception
+# (self-contained .db, no -wal/-shm; see golden_test.go).
+!testdata/golden/**/*.db
+
 # macOS
 .DS_Store

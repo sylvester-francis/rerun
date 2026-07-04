@@ -22,22 +22,105 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/sylvester-francis/rerun"
 	_ "modernc.org/sqlite"
 )
 
-// Store is a SQLite-backed rerun.Store. The mutex backs Guarder's try-lock.
+// Store is a SQLite-backed rerun.Store. The mutex guards a per-run held set that
+// backs Guarder's try-lock, so distinct runs lease independently.
 type Store struct {
-	db *sql.DB
-	mu sync.Mutex
+	db   *sql.DB
+	mu   sync.Mutex
+	held map[string]bool
 }
 
-// New opens (or creates) the database at path and ensures the schema exists.
-// The schema encodes two invariants directly: runs.id is a primary key (no
-// duplicate run) and journal(run_id, seq) is a composite primary key (no two
-// entries at the same position).
+// migrations is the ordered, append-only schema history. Migration 1 is the
+// v0.1 schema verbatim; a database that predates schema_version is adopted at
+// version 1 without modification. Never edit an entry — append.
+var migrations = []string{
+	`CREATE TABLE IF NOT EXISTS runs (
+		id       TEXT PRIMARY KEY,
+		workflow TEXT NOT NULL,
+		status   INTEGER NOT NULL,
+		created  DATETIME NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS journal (
+		run_id  TEXT NOT NULL,
+		seq     INTEGER NOT NULL,
+		tag     TEXT NOT NULL,
+		payload BLOB,
+		err     TEXT,
+		at      DATETIME NOT NULL,
+		PRIMARY KEY (run_id, seq)
+	);
+	CREATE TABLE IF NOT EXISTS signals (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		run_id  TEXT NOT NULL,
+		name    TEXT NOT NULL,
+		payload BLOB
+	);
+	CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);
+	CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`,
+
+	`ALTER TABLE runs ADD COLUMN input BLOB;
+	CREATE INDEX IF NOT EXISTS runs_status ON runs (status);`,
+}
+
+// migrate brings db up to the latest schema version. A pre-schema_version v0.1
+// database is adopted at version 1 (its tables already match migration 1) and
+// then carried forward; a fresh database runs every migration in order.
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
+		return fmt.Errorf("schema_version: %w", err)
+	}
+	var v int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&v); err != nil {
+		return fmt.Errorf("read version: %w", err)
+	}
+	if v == 0 {
+		// A v0.1 database has tables but no version row: adopt it at 1.
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='runs'`).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
+				return err
+			}
+			v = 1
+		}
+	}
+	for i := v; i < len(migrations); i++ {
+		// DDL and its version row commit together (SQLite has transactional DDL),
+		// so a crash mid-migration rolls the DDL back and the migration re-runs
+		// cleanly — a partial apply can never brick the database. This matters
+		// because migration 2's ALTER TABLE ADD COLUMN is not idempotent.
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("migration %d: begin: %w", i+1, err)
+		}
+		if _, err := tx.Exec(migrations[i]); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration %d: %w", i+1, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version (version) VALUES (?)`, i+1); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record migration %d: %w", i+1, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("migration %d: commit: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// New opens (or creates) the database at path and migrates it to the latest
+// schema. The schema encodes two invariants directly: runs.id is a primary key
+// (no duplicate run) and journal(run_id, seq) is a composite primary key (no two
+// entries at the same position). A v0.1 database is adopted and upgraded in place.
 func New(path string) *Store {
 	// WAL lets readers proceed alongside a writer; busy_timeout turns a
 	// momentary lock into a short wait instead of an error.
@@ -48,41 +131,21 @@ func New(path string) *Store {
 	}
 	db.SetMaxOpenConns(1) // single writer serializes cleanly and avoids "database is locked"
 
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS runs (
-			id       TEXT PRIMARY KEY,
-			workflow TEXT NOT NULL,
-			status   INTEGER NOT NULL,
-			created  DATETIME NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS journal (
-			run_id  TEXT NOT NULL,
-			seq     INTEGER NOT NULL,
-			tag     TEXT NOT NULL,
-			payload BLOB,
-			err     TEXT,
-			at      DATETIME NOT NULL,
-			PRIMARY KEY (run_id, seq)
-		);
-		CREATE TABLE IF NOT EXISTS signals (
-			id      INTEGER PRIMARY KEY AUTOINCREMENT,
-			run_id  TEXT NOT NULL,
-			name    TEXT NOT NULL,
-			payload BLOB
-		);
-		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);
-		CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`); err != nil {
-		panic(fmt.Sprintf("sqlite: schema: %v", err))
+	if err := migrate(db); err != nil {
+		panic(fmt.Sprintf("sqlite: migrate %s: %v", path, err))
 	}
-	return &Store{db: db}
+	return &Store{db: db, held: make(map[string]bool)}
 }
 
 func (s *Store) Create(ctx context.Context, r rerun.Run) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (id, workflow, status, created) VALUES (?, ?, ?, ?)`,
-		r.ID, r.Workflow, int(r.Status), r.Created,
+		`INSERT INTO runs (id, workflow, status, created, input) VALUES (?, ?, ?, ?, ?)`,
+		r.ID, r.Workflow, int(r.Status), r.Created, r.Input,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: runs.id") {
+			return fmt.Errorf("sqlite: create %s: %w", r.ID, rerun.ErrRunExists)
+		}
 		return fmt.Errorf("sqlite: create %s: %w", r.ID, err)
 	}
 	return nil
@@ -94,6 +157,9 @@ func (s *Store) Append(ctx context.Context, runID string, l rerun.Log) error {
 		runID, l.Seq, l.Tag, l.Payload, l.Err, l.At,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: journal.") {
+			return fmt.Errorf("sqlite: append %s seq %d: %w", runID, l.Seq, rerun.ErrSeqConflict)
+		}
 		return fmt.Errorf("sqlite: append %s seq %d: %w", runID, l.Seq, err)
 	}
 	return nil
@@ -132,7 +198,7 @@ func (s *Store) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error)
 
 func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, workflow, status, created FROM runs WHERE status IN (?, ?)`,
+		`SELECT id, workflow, status, created, input FROM runs WHERE status IN (?, ?)`,
 		int(rerun.Pending), int(rerun.Running),
 	)
 	if err != nil {
@@ -144,7 +210,7 @@ func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	for rows.Next() {
 		var r rerun.Run
 		var st int
-		if err := rows.Scan(&r.ID, &r.Workflow, &st, &r.Created); err != nil {
+		if err := rows.Scan(&r.ID, &r.Workflow, &st, &r.Created, &r.Input); err != nil {
 			return nil, fmt.Errorf("sqlite: scan run: %w", err)
 		}
 		r.Status = rerun.Status(st)
@@ -153,15 +219,24 @@ func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	return out, rows.Err()
 }
 
-// Acquire is a non-blocking try-lock. SQLite is a single-writer database, so one
-// mutex is the whole lease: a second Acquire while held reports acquired=false
-// rather than blocking. A distributed backend replaces exactly this method with
-// a cross-process lock (see the postgres package) and nothing else changes.
+// Acquire is a non-blocking, per-run try-lock over an in-process held set.
+// SQLite's single-writer I/O is already serialized by the connection cap; the
+// lease's only job is run-level mutual exclusion, so distinct runs lease
+// independently. Two *processes* sharing one SQLite file are not supported for
+// execution — that is what the postgres backend is for — and the journal primary
+// key fences the unsupported case.
 func (s *Store) Acquire(ctx context.Context, runID string) (io.Closer, bool, error) {
-	if !s.mu.TryLock() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.held[runID] {
 		return nil, false, nil
 	}
-	return closerFunc(s.mu.Unlock), true, nil
+	s.held[runID] = true
+	return closerFunc(func() {
+		s.mu.Lock()
+		delete(s.held, runID)
+		s.mu.Unlock()
+	}), true, nil
 }
 
 // PushSignal and PopSignal implement rerun.Signaler: a durable, per-run,

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"sync"
 
 	"github.com/sylvester-francis/rerun"
@@ -33,6 +34,7 @@ type MemStore struct {
 	mu        sync.Mutex
 	runs      map[string]rerun.Run
 	logs      map[string][]rerun.Log
+	seen      map[string]bool
 	held      map[string]bool
 	signals   map[string][][]byte
 	cancelReq map[string]bool
@@ -43,6 +45,7 @@ func NewMemStore() *MemStore {
 	return &MemStore{
 		runs:      make(map[string]rerun.Run),
 		logs:      make(map[string][]rerun.Log),
+		seen:      make(map[string]bool),
 		held:      make(map[string]bool),
 		signals:   make(map[string][][]byte),
 		cancelReq: make(map[string]bool),
@@ -53,7 +56,7 @@ func (m *MemStore) Create(ctx context.Context, r rerun.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, dup := m.runs[r.ID]; dup {
-		return fmt.Errorf("memstore: run %s already exists", r.ID)
+		return fmt.Errorf("memstore: run %s already exists: %w", r.ID, rerun.ErrRunExists)
 	}
 	m.runs[r.ID] = r
 	return nil
@@ -62,6 +65,13 @@ func (m *MemStore) Create(ctx context.Context, r rerun.Run) error {
 func (m *MemStore) Append(ctx context.Context, runID string, l rerun.Log) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// The (run, seq) pair is a primary key everywhere else; enforce it here too
+	// so a lost lease or a shrunken workflow fences on the same sentinel.
+	k := runID + "\x00" + strconv.Itoa(l.Seq)
+	if m.seen[k] {
+		return fmt.Errorf("memstore: append %s seq %d: %w", runID, l.Seq, rerun.ErrSeqConflict)
+	}
+	m.seen[k] = true
 	m.logs[runID] = append(m.logs[runID], l)
 	return nil
 }

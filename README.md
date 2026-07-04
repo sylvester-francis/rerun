@@ -340,7 +340,7 @@ e := rerun.New(store,
 
 ### Run lifecycle
 
-Every run moves through four states. `Recover` re-launches exactly those left in `Running` or `Pending` when the process died.
+A crash or `Shutdown` **parks** in-flight runs — they stay `Running` (or `Pending`) and resume when a later engine calls `Recover`; only `Cancel` produces `Cancelled`. A run the engine refuses to execute — a determinism panic, a corrupt journal, or a workflow that shrank — becomes `Stuck` and is excluded from recovery until `Redrive` re-admits it after a fix.
 
 ```mermaid
 stateDiagram-v2
@@ -348,15 +348,19 @@ stateDiagram-v2
     Pending --> Running: exec acquires lock
     Running --> Done: workflow returns nil
     Running --> Failed: workflow returns error
-    Running --> Running: 💥 crash + Recover()
-    Pending --> Pending: 💥 crash + Recover()
+    Running --> Cancelled: Cancel()
+    Running --> Stuck: 💥 panic, contained to the run
+    Running --> Running: 💥 crash / Shutdown + Recover()
+    Pending --> Pending: 💥 crash / Shutdown + Recover()
+    Stuck --> Pending: Redrive()
     Done --> [*]
     Failed --> [*]
+    Cancelled --> [*]
 ```
 
 ## When it panics vs. returns an error
 
-- **Panics** for *programmer errors* that can't be recovered: non-determinism (tag mismatch), journal corruption, duplicate workflow registration.
+- **Panics** for *programmer errors* that can't be recovered: non-determinism (tag mismatch), journal corruption, duplicate workflow registration. A panic inside a run is **contained to that run** — the run becomes `Stuck` and the process keeps serving its other runs.
 - **Errors** for *operational failures*: the store is unavailable, the context is cancelled, a step returns an error.
 
 ## Repository layout

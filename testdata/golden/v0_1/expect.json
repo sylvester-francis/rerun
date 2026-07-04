@@ -1,0 +1,34 @@
+{
+  "runs": [
+    {
+      "id": "r-order",
+      "workflow": "order",
+      "final": "Done",
+      "result": "txn-4711"
+    },
+    {
+      "id": "r-declined",
+      "workflow": "declined",
+      "final": "Failed",
+      "resultErr": "card declined"
+    },
+    {
+      "id": "r-features",
+      "workflow": "features",
+      "final": "Done",
+      "result": "ok"
+    },
+    {
+      "id": "r-approval",
+      "workflow": "approval",
+      "final": "Done",
+      "result": "approved"
+    },
+    {
+      "id": "r-midflight",
+      "workflow": "order",
+      "final": "Done",
+      "result": "txn-99"
+    }
+  ]
+}

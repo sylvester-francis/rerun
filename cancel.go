@@ -30,30 +30,39 @@ type Canceller interface {
 	CancelRequested(ctx context.Context, runID string) (bool, error)
 }
 
-// Cancel stops a run. If the run is executing in this process, its context is
-// cancelled immediately, so a parked Sleep or a ctx-respecting step unwinds and
-// the run finishes Cancelled. Otherwise, if the store is a Canceller, the
-// request is recorded durably and a worker running the run elsewhere picks it up
-// on its next poll (see WithCancelPoll) — cancellation is then eventual. With
-// neither a local run nor a Canceller store, it returns an error.
+// Cancel stops a run. When the store can record cancels durably, the request is
+// recorded FIRST — so a crash between this call and the run's terminal write
+// cannot resurrect the run: the next claim sees the request and finishes it
+// Cancelled. Then, if the run is executing in this process, its context unwinds
+// immediately. With neither a local run nor a Canceller store, there is nothing
+// to cancel with, and that is an error.
 func (e *Engine) Cancel(ctx context.Context, runID string) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	c, durable := e.store.(Canceller)
+	if durable {
+		if err := c.RequestCancel(ctx, runID); err != nil {
+			return err
+		}
+	}
 	e.cmu.Lock()
-	cancel, ok := e.cancels[runID]
+	cancel, local := e.cancels[runID]
 	e.cmu.Unlock()
-	if ok {
-		cancel()
+	if local {
+		cancel(errCancelRequested)
 		return nil
 	}
-	if c, ok := e.store.(Canceller); ok {
-		return c.RequestCancel(ctx, runID)
+	if !durable {
+		return fmt.Errorf("rerun: run %s is not running in this process and its store cannot record a cancel request", runID)
 	}
-	return fmt.Errorf("rerun: run %s is not running in this process and its store cannot record a cancel request", runID)
+	return nil
 }
 
 // pollCancel watches the store for a cancel request and cancels the run's
 // context when one appears. It runs only when WithCancelPoll is set and the
 // store is a Canceller, and stops as soon as the run's context is done.
-func (e *Engine) pollCancel(cctx context.Context, cancel context.CancelFunc, c Canceller, runID string) {
+func (e *Engine) pollCancel(cctx context.Context, cancel context.CancelCauseFunc, c Canceller, runID string) {
 	t := time.NewTicker(e.cancelPoll)
 	defer t.Stop()
 	for {
@@ -62,7 +71,7 @@ func (e *Engine) pollCancel(cctx context.Context, cancel context.CancelFunc, c C
 			return
 		case <-t.C:
 			if req, err := c.CancelRequested(context.Background(), runID); err == nil && req {
-				cancel()
+				cancel(errCancelRequested)
 				return
 			}
 		}

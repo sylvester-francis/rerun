@@ -32,6 +32,11 @@ const (
 	// Cancelled is terminal, like Done and Failed. It is appended after Failed
 	// so the existing values keep their numbers in journals and databases.
 	Cancelled
+	// Stuck marks a run the engine refuses to execute — a determinism panic, a
+	// corrupt journal, a workflow that shrank. It is excluded from Incomplete so
+	// nothing claims it again automatically; Redrive re-admits it after the
+	// operator ships a fix. Appended so values stay stable.
+	Stuck
 )
 
 func (s Status) String() string {
@@ -46,6 +51,8 @@ func (s Status) String() string {
 		return "Failed"
 	case Cancelled:
 		return "Cancelled"
+	case Stuck:
+		return "Stuck"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -62,12 +69,15 @@ type Log struct {
 	At      time.Time
 }
 
-// Run is the metadata for a single workflow instance.
+// Run is the metadata for a single workflow instance. Input is the optional
+// seed passed to Start, persisted atomically with the run's creation so a crash
+// can never separate a run from its input.
 type Run struct {
 	ID       string
 	Workflow string
 	Status   Status
 	Created  time.Time
+	Input    []byte
 }
 
 // Writer is the hot path: creating a run and appending step results as they

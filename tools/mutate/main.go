@@ -75,8 +75,8 @@ var mutants = []mutant{
 	},
 	{
 		name: "success marked failed", file: "run.go",
-		old:    "e.store.Finish(ctx, r.ID, Done)",
-		new:    "e.store.Finish(ctx, r.ID, Failed)",
+		old:    "e.store.Finish(pctx, r.ID, Done)",
+		new:    "e.store.Finish(pctx, r.ID, Failed)",
 		expect: mustKill, reason: "TestWorkflow_SuccessSetsDone",
 	},
 	{
@@ -84,6 +84,32 @@ var mutants = []mutant{
 		old:    "\tw.replay = false\n\tv, err := fn(w.ctx)",
 		new:    "\tv, err := fn(w.ctx)",
 		expect: equivalent, reason: "redundant: seq < len(logs) already gates replay",
+	},
+	{
+		name: "fast-fail guard removed", file: "workflow.go",
+		old:    "\tif w.ctx.Err() != nil {\n\t\tw.fastFailed.Store(true)\n\t\tvar zero T\n\t\treturn zero, w.ctx.Err()\n\t}",
+		new:    "",
+		expect: mustKill, reason: "TestDo_PostCancelFastFailsWithCanceled",
+	},
+	{
+		// Insert a terminal write as the first statement of the errParked case, so
+		// a parked run would be marked Cancelled instead of left incomplete.
+		name: "park treated as cancel", file: "run.go",
+		old:    "case errors.Is(cause, errParked):",
+		new:    "case errors.Is(cause, errParked):\n\t\te.store.Finish(pctx, r.ID, Cancelled)",
+		expect: mustKill, reason: "TestShutdown_ParksInFlightRuns",
+	},
+	{
+		name: "claim-time cancel check inverted", file: "run.go",
+		old:    "if req, cerr := c.CancelRequested(ctx, r.ID); cerr == nil && req {",
+		new:    "if req, cerr := c.CancelRequested(ctx, r.ID); cerr == nil && !req {",
+		expect: mustKill, reason: "TestCancel_SurvivesRestartViaClaimCheck",
+	},
+	{
+		name: "fast-fail completion guard removed", file: "run.go",
+		old:    "case werr == nil && !w.fastFailed.Load():",
+		new:    "case werr == nil:",
+		expect: mustKill, reason: "TestCancel_BeforeReturnMarksCancelledNotDone",
 	},
 }
 

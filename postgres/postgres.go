@@ -22,64 +22,133 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 
 	"github.com/sylvester-francis/rerun"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
+
+// isUnique reports whether err is a Postgres unique-violation (SQLSTATE 23505)
+// on the named constraint, so Create and Append can map the driver's typed
+// error onto rerun's sentinels without string matching.
+func isUnique(err error, constraint string) bool {
+	var pe *pq.Error
+	return errors.As(err, &pe) && pe.Code == "23505" && pe.Constraint == constraint
+}
 
 // Store is a Postgres-backed rerun.Store.
 type Store struct {
 	db *sql.DB
 }
 
-// New opens the database at dsn and ensures the schema exists. Unlike the
+// migrations is the ordered, append-only schema history. Migration 1 is the
+// v0.1 schema verbatim; a database that predates schema_version is adopted at
+// version 1 without modification. Never edit an entry — append.
+var migrations = []string{
+	`CREATE TABLE IF NOT EXISTS runs (
+		id       TEXT PRIMARY KEY,
+		workflow TEXT NOT NULL,
+		status   INTEGER NOT NULL,
+		created  TIMESTAMPTZ NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS journal (
+		run_id  TEXT NOT NULL,
+		seq     INTEGER NOT NULL,
+		tag     TEXT NOT NULL,
+		payload BYTEA,
+		err     TEXT,
+		at      TIMESTAMPTZ NOT NULL,
+		PRIMARY KEY (run_id, seq)
+	);
+	CREATE TABLE IF NOT EXISTS signals (
+		id      BIGSERIAL PRIMARY KEY,
+		run_id  TEXT NOT NULL,
+		name    TEXT NOT NULL,
+		payload BYTEA
+	);
+	CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);
+	CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`,
+
+	`ALTER TABLE runs ADD COLUMN IF NOT EXISTS input BYTEA;
+	CREATE INDEX IF NOT EXISTS runs_status ON runs (status);`,
+}
+
+// migrate brings db up to the latest schema version, each step in its own
+// transaction. A pre-schema_version v0.1 database (its runs table already
+// present in the current schema) is adopted at version 1 and carried forward.
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
+		return fmt.Errorf("schema_version: %w", err)
+	}
+	var v int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&v); err != nil {
+		return fmt.Errorf("read version: %w", err)
+	}
+	if v == 0 {
+		// A v0.1 database has tables but no version row: adopt it at 1. Scope the
+		// probe to the current schema, where the unqualified DDL below also acts.
+		var n int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'runs' AND table_schema = current_schema()`,
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
+				return err
+			}
+			v = 1
+		}
+	}
+	for i := v; i < len(migrations); i++ {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("migration %d: begin: %w", i+1, err)
+		}
+		if _, err := tx.Exec(migrations[i]); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("migration %d: %w", i+1, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_version (version) VALUES ($1)`, i+1); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("record migration %d: %w", i+1, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("migration %d: commit: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// New opens the database at dsn and migrates it to the latest schema. Unlike the
 // SQLite store it does not cap the pool: Postgres handles concurrency, and the
 // lease's exclusivity depends on a competing Acquire landing on a second
-// connection so it observes the lock as held.
+// connection so it observes the lock as held. A v0.1 database is adopted and
+// upgraded in place.
 func New(dsn string) *Store {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		panic(fmt.Sprintf("postgres: open: %v", err))
 	}
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS runs (
-			id       TEXT PRIMARY KEY,
-			workflow TEXT NOT NULL,
-			status   INTEGER NOT NULL,
-			created  TIMESTAMPTZ NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS journal (
-			run_id  TEXT NOT NULL,
-			seq     INTEGER NOT NULL,
-			tag     TEXT NOT NULL,
-			payload BYTEA,
-			err     TEXT,
-			at      TIMESTAMPTZ NOT NULL,
-			PRIMARY KEY (run_id, seq)
-		);
-		CREATE TABLE IF NOT EXISTS signals (
-			id      BIGSERIAL PRIMARY KEY,
-			run_id  TEXT NOT NULL,
-			name    TEXT NOT NULL,
-			payload BYTEA
-		);
-		CREATE INDEX IF NOT EXISTS signals_key ON signals (run_id, name, id);
-		CREATE TABLE IF NOT EXISTS cancellations (run_id TEXT PRIMARY KEY);`); err != nil {
-		panic(fmt.Sprintf("postgres: schema: %v", err))
+	if err := migrate(db); err != nil {
+		panic(fmt.Sprintf("postgres: migrate: %v", err))
 	}
 	return &Store{db: db}
 }
 
 func (s *Store) Create(ctx context.Context, r rerun.Run) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (id, workflow, status, created) VALUES ($1, $2, $3, $4)`,
-		r.ID, r.Workflow, int(r.Status), r.Created,
+		`INSERT INTO runs (id, workflow, status, created, input) VALUES ($1, $2, $3, $4, $5)`,
+		r.ID, r.Workflow, int(r.Status), r.Created, r.Input,
 	)
 	if err != nil {
+		if isUnique(err, "runs_pkey") {
+			return fmt.Errorf("postgres: create %s: %w", r.ID, rerun.ErrRunExists)
+		}
 		return fmt.Errorf("postgres: create %s: %w", r.ID, err)
 	}
 	return nil
@@ -91,6 +160,9 @@ func (s *Store) Append(ctx context.Context, runID string, l rerun.Log) error {
 		runID, l.Seq, l.Tag, l.Payload, l.Err, l.At,
 	)
 	if err != nil {
+		if isUnique(err, "journal_pkey") {
+			return fmt.Errorf("postgres: append %s seq %d: %w", runID, l.Seq, rerun.ErrSeqConflict)
+		}
 		return fmt.Errorf("postgres: append %s seq %d: %w", runID, l.Seq, err)
 	}
 	return nil
@@ -129,7 +201,7 @@ func (s *Store) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error)
 
 func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, workflow, status, created FROM runs WHERE status IN ($1, $2)`,
+		`SELECT id, workflow, status, created, input FROM runs WHERE status IN ($1, $2)`,
 		int(rerun.Pending), int(rerun.Running),
 	)
 	if err != nil {
@@ -141,7 +213,7 @@ func (s *Store) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	for rows.Next() {
 		var r rerun.Run
 		var st int
-		if err := rows.Scan(&r.ID, &r.Workflow, &st, &r.Created); err != nil {
+		if err := rows.Scan(&r.ID, &r.Workflow, &st, &r.Created, &r.Input); err != nil {
 			return nil, fmt.Errorf("postgres: scan run: %w", err)
 		}
 		r.Status = rerun.Status(st)

@@ -25,6 +25,7 @@ package storetest
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -138,6 +139,72 @@ func RunStoreContract(t *testing.T, makeStore func() rerun.Store) {
 		if err := s.Create(ctx, r); err == nil {
 			t.Fatal("duplicate create should error")
 		}
+	})
+
+	t.Run("stuck is not incomplete", func(t *testing.T) {
+		s := makeStore()
+		must(t, s.Create(ctx, rerun.Run{ID: "stuck1", Workflow: "wf", Status: rerun.Pending, Created: time.Now()}))
+		must(t, s.Finish(ctx, "stuck1", rerun.Stuck))
+		runs, err := s.Incomplete(ctx)
+		must(t, err)
+		for _, r := range runs {
+			if r.ID == "stuck1" {
+				t.Fatal("Stuck run returned as incomplete")
+			}
+		}
+	})
+
+	t.Run("locks are independent per run", func(t *testing.T) {
+		// v0.1.1's SQLite store had one mutex for every run ID, which silently
+		// serialized all execution. Two different runs must lease concurrently.
+		s := makeStore()
+		c1, ok, err := s.Acquire(ctx, "runA")
+		must(t, err)
+		if !ok {
+			t.Fatal("acquire runA should succeed")
+		}
+		c2, ok, err := s.Acquire(ctx, "runB")
+		must(t, err)
+		if !ok {
+			t.Fatal("holding runA must not block acquiring runB")
+		}
+		must(t, c2.Close())
+		must(t, c1.Close())
+	})
+
+	t.Run("duplicate append is a seq conflict", func(t *testing.T) {
+		s := makeStore()
+		must(t, s.Create(ctx, rerun.Run{ID: "fence", Workflow: "wf", Status: rerun.Running, Created: time.Now()}))
+		must(t, s.Append(ctx, "fence", rerun.Log{Seq: 0, Tag: "a", Payload: []byte(`1`), At: time.Now()}))
+		err := s.Append(ctx, "fence", rerun.Log{Seq: 0, Tag: "a", Payload: []byte(`2`), At: time.Now()})
+		if !errors.Is(err, rerun.ErrSeqConflict) {
+			t.Fatalf("duplicate (run, seq) append = %v, want ErrSeqConflict", err)
+		}
+	})
+
+	t.Run("duplicate create wraps ErrRunExists", func(t *testing.T) {
+		s := makeStore()
+		r := rerun.Run{ID: "dup2", Workflow: "wf", Status: rerun.Pending, Created: time.Now()}
+		must(t, s.Create(ctx, r))
+		if err := s.Create(ctx, r); !errors.Is(err, rerun.ErrRunExists) {
+			t.Fatalf("duplicate create = %v, want ErrRunExists", err)
+		}
+	})
+
+	t.Run("input round-trips through create and incomplete", func(t *testing.T) {
+		s := makeStore()
+		must(t, s.Create(ctx, rerun.Run{ID: "seeded", Workflow: "wf", Status: rerun.Pending, Created: time.Now(), Input: []byte(`"hello"`)}))
+		runs, err := s.Incomplete(ctx)
+		must(t, err)
+		for _, r := range runs {
+			if r.ID == "seeded" {
+				if string(r.Input) != `"hello"` {
+					t.Fatalf("input = %q, want \"hello\"", r.Input)
+				}
+				return
+			}
+		}
+		t.Fatal("seeded run not returned by Incomplete")
 	})
 }
 

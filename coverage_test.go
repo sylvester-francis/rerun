@@ -83,7 +83,10 @@ func (s *mockStore) get(runID string) rerun.Status {
 	return s.status[runID]
 }
 
-func TestExec_LoadLogsErrorFailsRun(t *testing.T) {
+func TestExec_LoadLogsErrorParksRun(t *testing.T) {
+	// A transient store read failure parks the run — it stays incomplete
+	// (Running) for a later claim rather than being marked terminal. Losing a
+	// run to a momentary store blip is the bug this avoids.
 	st := newMockStore()
 	st.failLoad = true
 	eng := rerun.New(st)
@@ -92,12 +95,15 @@ func TestExec_LoadLogsErrorFailsRun(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if st.get("r1") == rerun.Failed {
-			return
+		if st.get("r1") == rerun.Running {
+			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("run did not fail on a load error; status=%v", st.get("r1"))
+	time.Sleep(50 * time.Millisecond) // it must not proceed to a terminal status
+	if s := st.get("r1"); s != rerun.Running {
+		t.Fatalf("run after load error = %v, want Running (parked, not terminal)", s)
+	}
 }
 
 func TestRecover_IncompleteErrorReturns(t *testing.T) {
@@ -132,17 +138,6 @@ func TestDeliver_MarshalError(t *testing.T) {
 	}
 }
 
-func TestStart_InputMarshalPanics(t *testing.T) {
-	eng := rerun.New(internal.NewMemStore())
-	eng.Handle("wf", func(w *rerun.W) error { return nil })
-	defer func() {
-		if recover() == nil {
-			t.Fatal("Start with an unmarshalable input should panic")
-		}
-	}()
-	_ = eng.Start(context.Background(), "wf", "r1", make(chan int))
-}
-
 func TestInput_DecodeErrorFailsRun(t *testing.T) {
 	eng, store, _ := setup(t)
 	eng.Handle("wf", func(w *rerun.W) error {
@@ -154,14 +149,16 @@ func TestInput_DecodeErrorFailsRun(t *testing.T) {
 }
 
 func TestSleep_ContextCancelled(t *testing.T) {
+	// A run now outlives the caller's context (see
+	// TestStart_RunOutlivesCallerContext); its own context ends only via Cancel,
+	// which unwinds a parked Sleep into Cancelled.
 	eng, store, clk := setup(t)
 	eng.Handle("wf", func(w *rerun.W) error {
 		return rerun.Sleep(w, time.Hour)
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	must(t, eng.Start(ctx, "wf", "r1"))
+	must(t, eng.Start(context.Background(), "wf", "r1"))
 	clk.BlockUntil(1) // the sleep is parked
-	cancel()          // cancel while it waits
+	must(t, eng.Cancel(context.Background(), "r1"))
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 
@@ -225,15 +222,16 @@ func TestStart_CreateErrorReturns(t *testing.T) {
 }
 
 func TestWait_ContextCancelled(t *testing.T) {
+	// Wait unwinds when the run's context ends. Under engine-owned lifetimes that
+	// happens via Cancel, not the caller's context.
 	eng, store, _ := setup(t)
 	eng.Handle("wf", func(w *rerun.W) error {
 		_, err := rerun.Wait[bool](w, "never-arrives")
 		return err
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	must(t, eng.Start(ctx, "wf", "r1"))
-	time.Sleep(10 * time.Millisecond) // let Wait enter its poll loop
-	cancel()                          // cancel while it waits for a signal that never comes
+	must(t, eng.Start(context.Background(), "wf", "r1"))
+	time.Sleep(10 * time.Millisecond)               // let Wait enter its poll loop
+	must(t, eng.Cancel(context.Background(), "r1")) // cancel while it waits for a signal that never comes
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }
 
