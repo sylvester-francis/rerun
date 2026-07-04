@@ -116,3 +116,34 @@ func TestShutdown_BusinessErrorConvergesToFailed(t *testing.T) {
 		t.Fatalf("journaled failing step re-executed %d times, want 0", calls)
 	}
 }
+
+// A cancel that lands, then a crash, must still cancel: the request is durable
+// and honored at the next claim without executing the workflow.
+func TestCancel_SurvivesRestartViaClaimCheck(t *testing.T) {
+	store := internal.NewMemStore()
+	clk := newFakeClock()
+	a := rerun.New(store, rerun.WithClock(clk))
+	var ran int32
+	wf := func(w *rerun.W) error {
+		atomic.AddInt32(&ran, 1)
+		return rerun.Sleep(w, time.Hour)
+	}
+	a.Handle("wf", wf)
+	must(t, a.Start(context.Background(), "wf", "r1"))
+	clk.BlockUntil(1)
+	must(t, a.Cancel(context.Background(), "r1"))
+	waitStatus(t, store, "r1", rerun.Cancelled)
+
+	// "Crash": pretend the terminal write was lost, as if the process died
+	// between the context cancel and Finish committing.
+	must(t, store.Finish(context.Background(), "r1", rerun.Running))
+	atomic.StoreInt32(&ran, 0)
+
+	b := rerun.New(store, rerun.WithClock(newFakeClock()))
+	b.Handle("wf", wf)
+	must(t, b.Recover(context.Background()))
+	waitStatus(t, store, "r1", rerun.Cancelled)
+	if atomic.LoadInt32(&ran) != 0 {
+		t.Fatalf("cancelled run executed %d times at re-claim, want 0", ran)
+	}
+}

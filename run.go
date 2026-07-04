@@ -87,6 +87,17 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 		}
 	}()
 
+	// Honor a durable cancel before doing any work: cancels then survive restarts
+	// even when polling is disabled — a request that landed before a crash is
+	// finished at the next claim without ever re-running the workflow.
+	if c, ok := e.store.(Canceller); ok {
+		if req, cerr := c.CancelRequested(ctx, r.ID); cerr == nil && req {
+			e.store.Finish(pctx, r.ID, Cancelled)
+			e.obs.OnFinish(r.ID, Cancelled)
+			return
+		}
+	}
+
 	// When cross-process cancellation is enabled and the store supports it, watch
 	// for a cancel request recorded by another process.
 	if c, ok := e.store.(Canceller); ok && e.cancelPoll > 0 {
