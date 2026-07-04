@@ -230,7 +230,7 @@ func TestWait_ContextCancelled(t *testing.T) {
 		return err
 	})
 	must(t, eng.Start(context.Background(), "wf", "r1"))
-	time.Sleep(10 * time.Millisecond) // let Wait enter its poll loop
+	time.Sleep(10 * time.Millisecond)               // let Wait enter its poll loop
 	must(t, eng.Cancel(context.Background(), "r1")) // cancel while it waits for a signal that never comes
 	waitStatus(t, store, "r1", rerun.Cancelled)
 }

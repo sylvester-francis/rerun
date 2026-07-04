@@ -72,11 +72,11 @@ type Opt func(*Engine)
 func New(s Store, opts ...Opt) *Engine {
 	root, rootCancel := context.WithCancelCause(context.Background())
 	e := &Engine{
-		store:      s,
-		codec:      jsonCodec{},
-		clock:      wall{},
-		obs:        noopObserver{},
-		reg:        make(map[string]Func),
+		store:        s,
+		codec:        jsonCodec{},
+		clock:        wall{},
+		obs:          noopObserver{},
+		reg:          make(map[string]Func),
 		root:         root,
 		rootCancel:   rootCancel,
 		cancels:      make(map[string]context.CancelCauseFunc),
