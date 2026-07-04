@@ -188,8 +188,10 @@ type runAbort struct{ cause error }
 
 // Redrive resets a Stuck run to Pending so the next Recover (or, from M2, the
 // dispatcher) claims it again — the operator's lever after shipping a fix. M1
-// note: this resets unconditionally; M2's Inspector adds verification that the
-// run is actually Stuck.
+// note: this resets unconditionally and does not clear a durable cancel request,
+// so a run that was ever cancel-requested is re-finished Cancelled at the next
+// claim rather than re-run (start a fresh run ID in that case). M2's Inspector
+// adds status verification and cancel-aware redrive.
 func (e *Engine) Redrive(ctx context.Context, runID string) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
