@@ -283,19 +283,28 @@ entries `2, 0, 1` specifically to catch a backend that forgot it.
 
 The split is principled, and it is the guardrail against hiding corruption:
 
-- **Panic on programmer errors** — a determinism violation, an unknown or
-  duplicate workflow name, a result that cannot be serialized, a journal payload
-  that will not unmarshal into the declared type. The program is built wrong;
-  failing loud and early is the service.
-- **Return errors for operational conditions** — a step's own business failure, a
-  store write that fails, a cancelled context. These are expected in a running
-  system, and the caller decides what to do.
+- **Panic on programmer errors** — a determinism violation, a duplicate workflow
+  name, a result that cannot be serialized, a journal payload that will not
+  unmarshal into the declared type. The program is built wrong; failing loud is
+  the service.
+- **Return errors for operational conditions** — a step's own business failure or
+  a cancelled context. These are expected in a running system, and the caller
+  decides what to do.
+
+A panic inside a run is **contained**, not fatal to the process. The engine's
+per-run recover marks the run `Stuck` (a terminal-ish status excluded from
+recovery) and keeps serving every other run; `Redrive` re-admits a `Stuck` run
+once you ship a fix. A panic must never escape a run's goroutine. Transient
+trouble is gentler still: a failed journal write, a lost lease, or an unknown
+workflow name (another worker in the fleet may own it) *parks* the run — it stays
+incomplete and a later claim retries it — rather than sticking or failing it.
 
 The litmus test: *could this happen in a correct program talking to a healthy
-world?* If yes, it is an error. If it can only happen because the code or the
-stored data is wrong, it is a panic. Converting the determinism panic into a
-`Failed` status would trade a screaming failure for a silent one — that is a bug,
-not defensiveness.
+world?* If yes, it is an operational condition (an error, or a park). If it can
+only happen because the code or the stored data is wrong, it is a panic — and
+that panic sticks the one run, not the process. Converting the determinism panic
+into a `Failed` status would trade a screaming failure for a silent one — that is
+a bug, not defensiveness.
 
 ---
 

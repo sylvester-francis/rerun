@@ -28,3 +28,7 @@ rerun executes workflow code you register and serializes step results through a
 `Codec` (JSON by default). Treat journal payloads as trusted data written by
 your own workflows; rerun does not sandbox workflow functions or validate that a
 stored payload is safe to unmarshal beyond the type check replay performs.
+
+Known-vulnerability scanning (`govulncheck`) runs nightly in CI against the
+module and its dependencies, on a `check-latest` Go toolchain so standard-library
+advisories are picked up as patched releases land.

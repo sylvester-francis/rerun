@@ -74,7 +74,7 @@ own goroutine, so one process drives thousands of concurrent runs.
 
 ## 3. Wire it into your service lifecycle
 
-Two integration points, and that's the whole discipline:
+Three integration points, and that's the whole discipline:
 
 **On startup, call `Recover` once**, after registering your workflows. It finds
 every run left `Pending`/`Running` by the previous process and resumes it from
@@ -108,6 +108,24 @@ func handleSignup(w http.ResponseWriter, r *http.Request) {
 The **run ID is your idempotency key.** Derive it from the thing the workflow is
 about (an order ID, a user ID) and starting the same run twice is safely
 rejected by the store.
+
+A run **outlives the context you start it with.** Passing `r.Context()` to
+`Start` is fine: the run detaches from the request and keeps executing after the
+handler returns and its context is cancelled. Only `Cancel` (or `Shutdown`)
+stops a run.
+
+**On shutdown, call `Shutdown`** to stop gracefully. It refuses new `Start`/
+`Recover` calls and *parks* every in-flight run — each stops without a terminal
+status, stays incomplete in the store, and resumes when a future process calls
+`Recover`. Nothing is lost, and only `Cancel` ever produces a `Cancelled` run:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+if err := engine.Shutdown(ctx); err != nil {
+    log.Printf("shutdown timed out with runs still draining: %v", err)
+}
+```
 
 ---
 

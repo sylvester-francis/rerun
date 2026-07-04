@@ -5,7 +5,7 @@ All notable changes to this project are documented here. The format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is `0.x` the public API may change between minor releases.
 
-## [Unreleased]
+## [0.2.0] - 2026-07-04
 
 M1 — Correct under failure. `rerun` is now safe to run in production: runs are
 never lost, duplicated, spuriously cancelled, or able to crash the process —
@@ -29,6 +29,12 @@ compatibility gate.
 - A v0.1.1 golden-journal compatibility gate (`TestGolden_*`) and a SIGKILL
   crash-injection harness (`crashtest`) that asserts exactly-once effects at
   every step boundary.
+- Complete godoc coverage: every exported symbol is now documented, enforced by
+  a new `doc-check` gate (`tools/doccheck`).
+- CI pipeline: a build/test/race matrix (ubuntu + macOS), `lint`
+  (gofmt + staticcheck), a Windows build, the mutation gate, a Postgres contract
+  job, and a nightly `govulncheck`; a documentation landing site published to
+  GitHub Pages.
 
 ### Changed
 

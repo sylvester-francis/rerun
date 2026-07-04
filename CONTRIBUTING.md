@@ -12,13 +12,20 @@ bar is: changes keep it correct, and the tests prove it.
 ## The local bar
 
 ```sh
-make          # go vet + go test -race + the mutation gate
-make pg-test  # Postgres store contract against an ephemeral container (needs Docker)
+make           # go vet + lint + go test -race + the mutation gate + doc-check
+make lint      # gofmt cleanliness + staticcheck
+make doc-check # fail on any undocumented exported symbol
+make pg-test   # Postgres store contract against an ephemeral container (needs Docker)
 ```
 
-A change is ready when `make` is green. `go test -race ./...` must stay green,
-`go vet ./...` must be clean, and `go run ./tools/mutate` must report
-`PASS: every mutant matched expectation`.
+A change is ready when `make` is green: `go vet ./...` clean, `gofmt` and
+`staticcheck` clean, `go test -race ./...` green (this includes the SIGKILL
+crash-injection harness under `crashtest/`), every exported symbol documented,
+and `go run ./tools/mutate` reporting `PASS: every mutant matched expectation`.
+
+CI runs the same bar across a ubuntu + macOS matrix, a Windows build, and the
+Postgres contract against a service container; `govulncheck` runs nightly. The
+`docs/using-rerun.md` guide and the landing site are published from `main`.
 
 ## What the mutation gate expects of a test
 
@@ -38,9 +45,11 @@ equivalent mutant (record it in `tools/mutate` with a one-line reason, as the
   (`Store`, `Codec`, `Clock`, `Observer`). Backends import `rerun`; the engine
   imports no backend. A new backend must change zero lines of engine code.
 - **Panic vs. error.** Panic on programmer errors (determinism violation,
-  unknown/duplicate workflow, un-marshalable result). Return errors for
-  operational conditions (a step's business failure, a store write failure, a
-  cancelled context).
+  duplicate workflow, un-marshalable result). Return errors for operational
+  conditions (a step's business failure, a cancelled context). A panic inside a
+  run is *contained* to that run — the engine's recover marks it `Stuck` and the
+  process keeps serving its other runs; a panic must never escape a run's
+  goroutine.
 - **Style.** Short names in tight scopes; comments explain *why*, not *what*;
   `any`, never `interface{}`; `context.Context` first on anything that blocks or
   does I/O.
