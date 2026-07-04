@@ -172,6 +172,17 @@ func (e *Engine) lookup(name string) Func {
 	return fn
 }
 
+// lookupSafe is lookup for the claim path: an unknown name returns (nil, false)
+// for exec to park on rather than a panic. A run whose workflow is registered on
+// a different worker in a heterogeneous fleet must not crash the worker that
+// happens to claim it.
+func (e *Engine) lookupSafe(name string) (Func, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	fn, ok := e.reg[name]
+	return fn, ok
+}
+
 // register tracks a running run's cancel func so Cancel can reach it; unregister
 // clears it when the run finishes.
 func (e *Engine) register(runID string, cancel context.CancelCauseFunc) {

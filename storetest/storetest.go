@@ -139,6 +139,19 @@ func RunStoreContract(t *testing.T, makeStore func() rerun.Store) {
 			t.Fatal("duplicate create should error")
 		}
 	})
+
+	t.Run("stuck is not incomplete", func(t *testing.T) {
+		s := makeStore()
+		must(t, s.Create(ctx, rerun.Run{ID: "stuck1", Workflow: "wf", Status: rerun.Pending, Created: time.Now()}))
+		must(t, s.Finish(ctx, "stuck1", rerun.Stuck))
+		runs, err := s.Incomplete(ctx)
+		must(t, err)
+		for _, r := range runs {
+			if r.ID == "stuck1" {
+				t.Fatal("Stuck run returned as incomplete")
+			}
+		}
+	})
 }
 
 // RunSignalerContract exercises a rerun.Signaler mailbox: FIFO delivery, an

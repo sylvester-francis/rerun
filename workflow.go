@@ -110,7 +110,10 @@ func liveStep[T any](w *W, tag string, fn func(context.Context) (T, error)) (T, 
 	pctx, done := w.eng.pctx(w.ctx)
 	defer done()
 	if serr := w.eng.store.Append(pctx, w.RunID, l); serr != nil {
-		panic(fmt.Sprintf("rerun: journal write failed at seq %d in run %s: %v", w.seq, w.RunID, serr))
+		// The step's effect happened but its record did not land. Stop this run
+		// here (at-least-once: the step re-executes on a later claim) rather than
+		// kill the process or fabricate progress.
+		panic(runAbort{cause: fmt.Errorf("rerun: journal write failed at seq %d in run %s: %w", w.seq, w.RunID, serr)})
 	}
 	w.eng.obs.OnStep(w.RunID, l)
 

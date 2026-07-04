@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 )
 
 // Start creates a Pending run and launches it in its own goroutine. It returns
@@ -47,9 +48,9 @@ func (e *Engine) Start(ctx context.Context, workflow, runID string, in ...any) e
 }
 
 // exec leases the run, replays its journal to the crash point, and runs the
-// remainder live. Recovery reuses this exact path with a pre-populated journal,
-// so resuming a crashed run is the normal path and not a second one with its own
-// bugs. A run already held by another worker is skipped, not stolen.
+// remainder live. Recovery reuses this exact path. Every failure inside it is
+// contained to this run: a panic sticks the run, a transient store error or a
+// lost lease parks it, and in no case does the process die.
 func (e *Engine) exec(ctx context.Context, r Run) {
 	release, acquired, err := e.store.Acquire(ctx, r.ID)
 	if err != nil || !acquired {
@@ -66,18 +67,42 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	e.register(r.ID, cancel)
 	defer e.unregister(r.ID)
 
+	// Terminal writes are detached from the run's cancellation: a cancel must
+	// never lose the record of a run that already reached a terminal outcome.
+	pctx, pdone := e.pctx(ctx)
+	defer pdone()
+
+	defer func() {
+		if p := recover(); p != nil {
+			if _, isAbort := p.(runAbort); isAbort {
+				return // park: lease releases, status stays incomplete
+			}
+			// A programmer error (determinism, corruption, marshal). Keep the
+			// message loud, but confine the blast radius to this run.
+			e.store.Finish(pctx, r.ID, Stuck)
+			e.obs.OnFinish(r.ID, Stuck)
+			_ = fmt.Sprintf("rerun: run %s stuck: %v\n%s", r.ID, p, debug.Stack()) // replaced by real logging in M2
+		}
+	}()
+
 	// When cross-process cancellation is enabled and the store supports it, watch
 	// for a cancel request recorded by another process.
 	if c, ok := e.store.(Canceller); ok && e.cancelPoll > 0 {
 		go e.pollCancel(cctx, cancel, c, r.ID)
 	}
 
+	fn, ok := e.lookupSafe(r.Workflow)
+	if !ok {
+		// Not registered in THIS process. In a heterogeneous fleet another worker
+		// may own this workflow, so park untouched — never stick.
+		return
+	}
+
 	e.store.Finish(ctx, r.ID, Running)
 
 	logs, err := e.store.LoadLogs(ctx, r.ID)
 	if err != nil {
-		e.store.Finish(ctx, r.ID, Failed)
-		return
+		return // transient store failure: park, a later claim retries
 	}
 
 	// Separate engine metadata (the seed at inputSeq, a terminal error at errSeq)
@@ -99,17 +124,16 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	}
 
 	w := &W{RunID: r.ID, logs: steps, input: input, replay: len(steps) > 0, eng: e, ctx: cctx}
-	fn := e.lookup(r.Workflow)
 	werr := fn(w)
 	cause := context.Cause(cctx)
-	// Terminal writes are detached from the run's cancellation: a cancel must
-	// never lose the record of a run that already reached a terminal outcome.
-	pctx, pdone := e.pctx(ctx)
-	defer pdone()
 	switch {
 	case werr == nil:
-		// A run that finished before noticing a cancel or shutdown is Done: its
-		// work is real and its journal is complete.
+		if w.seq < len(w.logs) {
+			panic(fmt.Sprintf(
+				"rerun: run %s returned with %d unconsumed journal entries (next seq %d): the workflow shrank; gate the change with Version",
+				r.ID, len(w.logs)-w.seq, w.seq,
+			))
+		}
 		e.store.Finish(pctx, r.ID, Done)
 		e.obs.OnFinish(r.ID, Done)
 	case errors.Is(cause, errCancelRequested):
@@ -127,6 +151,23 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 		e.store.Finish(pctx, r.ID, Failed)
 		e.obs.OnFinish(r.ID, Failed)
 	}
+}
+
+// runAbort is the panic value liveStep uses to unwind a run the engine must
+// stop executing (lost lease, failed journal write) without sticking it. It is
+// a panic, not an error return, so user code cannot accidentally swallow it and
+// keep executing steps.
+type runAbort struct{ cause error }
+
+// Redrive resets a Stuck run to Pending so the next Recover (or, from M2, the
+// dispatcher) claims it again — the operator's lever after shipping a fix. M1
+// note: this resets unconditionally; M2's Inspector adds verification that the
+// run is actually Stuck.
+func (e *Engine) Redrive(ctx context.Context, runID string) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	return e.store.Finish(ctx, runID, Pending)
 }
 
 // Recover relaunches every incomplete run through exec, resuming workflows a

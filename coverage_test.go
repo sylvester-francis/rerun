@@ -83,7 +83,10 @@ func (s *mockStore) get(runID string) rerun.Status {
 	return s.status[runID]
 }
 
-func TestExec_LoadLogsErrorFailsRun(t *testing.T) {
+func TestExec_LoadLogsErrorParksRun(t *testing.T) {
+	// A transient store read failure parks the run — it stays incomplete
+	// (Running) for a later claim rather than being marked terminal. Losing a
+	// run to a momentary store blip is the bug this avoids.
 	st := newMockStore()
 	st.failLoad = true
 	eng := rerun.New(st)
@@ -92,12 +95,15 @@ func TestExec_LoadLogsErrorFailsRun(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if st.get("r1") == rerun.Failed {
-			return
+		if st.get("r1") == rerun.Running {
+			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("run did not fail on a load error; status=%v", st.get("r1"))
+	time.Sleep(50 * time.Millisecond) // it must not proceed to a terminal status
+	if s := st.get("r1"); s != rerun.Running {
+		t.Fatalf("run after load error = %v, want Running (parked, not terminal)", s)
+	}
 }
 
 func TestRecover_IncompleteErrorReturns(t *testing.T) {
