@@ -52,6 +52,7 @@ func NewMemStore() *MemStore {
 	}
 }
 
+// Create records a new run, rejecting a duplicate ID with rerun.ErrRunExists.
 func (m *MemStore) Create(ctx context.Context, r rerun.Run) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -62,6 +63,8 @@ func (m *MemStore) Create(ctx context.Context, r rerun.Run) error {
 	return nil
 }
 
+// Append adds a journal entry, rejecting a duplicate (run, seq) position with
+// rerun.ErrSeqConflict.
 func (m *MemStore) Append(ctx context.Context, runID string, l rerun.Log) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -76,6 +79,7 @@ func (m *MemStore) Append(ctx context.Context, runID string, l rerun.Log) error 
 	return nil
 }
 
+// Finish sets a run's status; it errors if the run does not exist.
 func (m *MemStore) Finish(ctx context.Context, runID string, s rerun.Status) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -88,6 +92,7 @@ func (m *MemStore) Finish(ctx context.Context, runID string, s rerun.Status) err
 	return nil
 }
 
+// LoadLogs returns a run's journal entries sorted by sequence.
 func (m *MemStore) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -98,6 +103,7 @@ func (m *MemStore) LoadLogs(ctx context.Context, runID string) ([]rerun.Log, err
 	return out, nil
 }
 
+// Incomplete returns every run still Pending or Running.
 func (m *MemStore) Incomplete(ctx context.Context) ([]rerun.Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -150,6 +156,7 @@ func (m *MemStore) PushSignal(ctx context.Context, runID, name string, payload [
 	return nil
 }
 
+// PopSignal removes and returns the oldest queued signal for (runID, name).
 func (m *MemStore) PopSignal(ctx context.Context, runID, name string) ([]byte, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -174,6 +181,7 @@ func (m *MemStore) RequestCancel(ctx context.Context, runID string) error {
 	return nil
 }
 
+// CancelRequested reports whether a cancel has been requested for the run.
 func (m *MemStore) CancelRequested(ctx context.Context, runID string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

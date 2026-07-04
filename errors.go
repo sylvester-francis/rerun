@@ -26,6 +26,7 @@ type StepError struct {
 	Msg string
 }
 
+// Error renders the failed step's tag and message.
 func (e *StepError) Error() string {
 	return fmt.Sprintf("rerun: step %q: %s", e.Tag, e.Msg)
 }

@@ -25,9 +25,13 @@ import (
 type Status int
 
 const (
+	// Pending is the initial state: a run created but not yet claimed and executed.
 	Pending Status = iota
+	// Running marks a run currently leased and executing (or replaying its journal).
 	Running
+	// Done is terminal: the workflow returned without error.
 	Done
+	// Failed is terminal: the workflow returned an error, recorded in the journal.
 	Failed
 	// Cancelled is terminal, like Done and Failed. It is appended after Failed
 	// so the existing values keep their numbers in journals and databases.
@@ -39,6 +43,8 @@ const (
 	Stuck
 )
 
+// String renders the status name (Pending, Running, Done, Failed, Cancelled,
+// Stuck) for logs and errors; an unknown value renders as Status(n).
 func (s Status) String() string {
 	switch s {
 	case Pending:
