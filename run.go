@@ -102,14 +102,18 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	fn := e.lookup(r.Workflow)
 	werr := fn(w)
 	cause := context.Cause(cctx)
+	// Terminal writes are detached from the run's cancellation: a cancel must
+	// never lose the record of a run that already reached a terminal outcome.
+	pctx, pdone := e.pctx(ctx)
+	defer pdone()
 	switch {
 	case werr == nil:
 		// A run that finished before noticing a cancel or shutdown is Done: its
 		// work is real and its journal is complete.
-		e.store.Finish(ctx, r.ID, Done)
+		e.store.Finish(pctx, r.ID, Done)
 		e.obs.OnFinish(r.ID, Done)
 	case errors.Is(cause, errCancelRequested):
-		e.store.Finish(ctx, r.ID, Cancelled)
+		e.store.Finish(pctx, r.ID, Cancelled)
 		e.obs.OnFinish(r.ID, Cancelled)
 	case errors.Is(cause, errParked):
 		// Parking is crash-equivalent: no status write, the lease releases on
@@ -118,9 +122,9 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 	default:
 		if !haveErr {
 			// Record the terminal error once so Result can surface why it failed.
-			e.store.Append(ctx, r.ID, Log{Seq: errSeq, Tag: errorTag, Err: werr.Error(), At: e.clock.Now()})
+			e.store.Append(pctx, r.ID, Log{Seq: errSeq, Tag: errorTag, Err: werr.Error(), At: e.clock.Now()})
 		}
-		e.store.Finish(ctx, r.ID, Failed)
+		e.store.Finish(pctx, r.ID, Failed)
 		e.obs.OnFinish(r.ID, Failed)
 	}
 }

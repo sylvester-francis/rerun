@@ -51,6 +51,10 @@ type Engine struct {
 	// cancelPoll is how often a running run checks the store for a cross-process
 	// cancel request; zero disables the check (in-process Cancel only).
 	cancelPoll time.Duration
+
+	// storeTimeout bounds every journal and status write (see pctx). Zero means
+	// no timeout.
+	storeTimeout time.Duration
 }
 
 // The two ways an exec context ends besides a step's own failure. exec reads
@@ -73,9 +77,10 @@ func New(s Store, opts ...Opt) *Engine {
 		clock:      wall{},
 		obs:        noopObserver{},
 		reg:        make(map[string]Func),
-		root:       root,
-		rootCancel: rootCancel,
-		cancels:    make(map[string]context.CancelCauseFunc),
+		root:         root,
+		rootCancel:   rootCancel,
+		cancels:      make(map[string]context.CancelCauseFunc),
+		storeTimeout: 30 * time.Second,
 	}
 	for _, o := range opts {
 		o(e)
@@ -127,6 +132,21 @@ func WithObserver(o Observer) Opt { return func(e *Engine) { e.obs = o } }
 // the default, disables the check so a run parks for free and only in-process
 // Cancel applies. Cross-process cancellation is eventual, within one interval.
 func WithCancelPoll(d time.Duration) Opt { return func(e *Engine) { e.cancelPoll = d } }
+
+// WithStoreTimeout bounds every journal and status write. The write context is
+// detached from the run's cancellation on purpose: a cancel must never be able
+// to lose the record of work that already happened. The default is 30s.
+func WithStoreTimeout(d time.Duration) Opt { return func(e *Engine) { e.storeTimeout = d } }
+
+// pctx is the persistence context for a store write: it survives the run's
+// cancellation and is bounded by the store timeout.
+func (e *Engine) pctx(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if e.storeTimeout <= 0 {
+		return base, func() {}
+	}
+	return context.WithTimeout(base, e.storeTimeout)
+}
 
 // Handle registers a workflow body under a name. It panics on a duplicate: two
 // workflows sharing a name is a build-time programmer error, not a runtime

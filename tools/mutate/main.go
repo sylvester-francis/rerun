@@ -75,8 +75,8 @@ var mutants = []mutant{
 	},
 	{
 		name: "success marked failed", file: "run.go",
-		old:    "e.store.Finish(ctx, r.ID, Done)",
-		new:    "e.store.Finish(ctx, r.ID, Failed)",
+		old:    "e.store.Finish(pctx, r.ID, Done)",
+		new:    "e.store.Finish(pctx, r.ID, Failed)",
 		expect: mustKill, reason: "TestWorkflow_SuccessSetsDone",
 	},
 	{

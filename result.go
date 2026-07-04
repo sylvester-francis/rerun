@@ -26,10 +26,11 @@ const (
 )
 
 // Return records the run's result. Call it once, at a deterministic point
-// (typically the workflow's last act). It is journaled like any step — an
-// ordinary Do under the hood — so replay reproduces it without re-running.
+// (typically the workflow's last act). It is journaled like any step — a
+// doStep under the hood (Do itself would reject the reserved result tag) — so
+// replay reproduces it without re-running.
 func Return[T any](w *W, v T) {
-	Do(w, resultTag, func(context.Context) (T, error) { return v, nil })
+	doStep(w, resultTag, func(context.Context) (T, error) { return v, nil })
 }
 
 // Result reads the value a run recorded with Return, decoded as T. If the run
