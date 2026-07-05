@@ -430,7 +430,7 @@ Contributions are welcome. Good places to start:
 - The open [issues](https://github.com/sylvester-francis/rerun/issues), including anything tagged [`good first issue`](https://github.com/sylvester-francis/rerun/labels/good%20first%20issue) or [`help wanted`](https://github.com/sylvester-francis/rerun/labels/help%20wanted).
 - The [decision records](docs/adr/) and the determinism rules explain the guarantees rerun makes, so a change preserves them rather than working around them.
 
-Build and test with `go test -race ./...` (see [`CONTRIBUTING.md`](CONTRIBUTING.md)). Please sign your commits off (`git commit -s`); no CLA.
+Substantial changes start with an approved **ADR** before implementation, and pull requests stay focused (a PR over 20 files is blocked); see [`CONTRIBUTING.md`](CONTRIBUTING.md). Build and test with `go test -race ./...`. Please sign your commits off (`git commit -s`); no CLA.
 
 ## Author
 
