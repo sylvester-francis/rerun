@@ -423,6 +423,15 @@ Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), typed r
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`CHANGELOG.md`](CHANGELOG.md)
 - API reference on [pkg.go.dev](https://pkg.go.dev/github.com/sylvester-francis/rerun).
 
+## Contributing
+
+Contributions are welcome. Good places to start:
+
+- The open [issues](https://github.com/sylvester-francis/rerun/issues), including anything tagged [`good first issue`](https://github.com/sylvester-francis/rerun/labels/good%20first%20issue) or [`help wanted`](https://github.com/sylvester-francis/rerun/labels/help%20wanted).
+- The [decision records](docs/adr/) and the determinism rules explain the guarantees rerun makes, so a change preserves them rather than working around them.
+
+Build and test with `go test -race ./...` (see [`CONTRIBUTING.md`](CONTRIBUTING.md)). Please sign your commits off (`git commit -s`); no CLA.
+
 ## Author
 
 Created and maintained by [Sylvester Francis](https://github.com/sylvester-francis).
