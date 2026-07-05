@@ -423,8 +423,13 @@ Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), typed r
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`CHANGELOG.md`](CHANGELOG.md)
 - API reference on [pkg.go.dev](https://pkg.go.dev/github.com/sylvester-francis/rerun).
 
+## Author
+
+Created and maintained by [Sylvester Francis](https://github.com/sylvester-francis).
+
 ## License
 
-[Apache License 2.0](LICENSE) © 2026 Sylvester Francis
+[Apache License 2.0](LICENSE) © 2026 Sylvester Francis, with attribution retained
+per the [`NOTICE`](NOTICE) file.
 
 Derivative works must retain the attribution notices in [NOTICE](NOTICE), per Section 4(d) of the license.
