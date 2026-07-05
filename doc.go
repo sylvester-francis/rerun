@@ -43,7 +43,9 @@
 // result steers a branch — must be captured inside a Do so its value is
 // journaled and replayed, never recomputed. On replay, a tag that diverges from
 // the journal panics, loudly and early, because a silent divergence corrupts
-// every later step.
+// every later step. Errors are journaled too, but a replayed step failure is a
+// *StepError carrying only the message, not the original error type — so branch
+// on whether a step failed, never on an error's type or sentinel value.
 //
 // # Guarantees
 //
