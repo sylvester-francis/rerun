@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime/debug"
 )
 
 // Start creates a Pending run and launches it in its own goroutine. It returns
@@ -83,9 +82,13 @@ func (e *Engine) exec(ctx context.Context, r Run) {
 			// message loud, but confine the blast radius to this run.
 			pctx, pdone := e.pctx(ctx)
 			defer pdone()
+			// Journal why it stuck, mirroring the Failed path, so Result can surface
+			// the reason to an operator before a Redrive. The panic message already
+			// pinpoints a determinism break by seq and tag; the run stays excluded
+			// from recovery until Redrive re-admits it.
+			e.store.Append(pctx, r.ID, Log{Seq: errSeq, Tag: errorTag, Err: fmt.Sprintf("stuck: %v", p), At: e.clock.Now()})
 			e.store.Finish(pctx, r.ID, Stuck)
 			e.obs.OnFinish(r.ID, Stuck)
-			_ = fmt.Sprintf("rerun: run %s stuck: %v\n%s", r.ID, p, debug.Stack()) // replaced by real logging in M2
 		}
 	}()
 

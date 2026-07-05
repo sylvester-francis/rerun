@@ -169,6 +169,13 @@ One consequence worth stating: **errors are results too.** A step that returns
 `replayStep` reconstructs it as a `*StepError` (`errors.go`) and returns the same
 error — it does not re-run the charge hoping for a different answer.
 
+The reconstruction preserves the *message*, not the original concrete *type*: a
+replayed failure is always a `*StepError`. So the determinism rule reaches errors
+too — never branch on an error's type or sentinel (`errors.As`/`errors.Is` against
+your own error), because that check passes on the live run and fails on replay.
+Branch on *whether* a step errored; to steer control flow on *why*, journal the
+reason as a value inside the `Do` and branch on that.
+
 ---
 
 ## 5. Durable time: a sleep is a deadline

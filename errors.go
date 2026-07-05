@@ -20,7 +20,16 @@ import (
 )
 
 // StepError carries a failed step's tag and message so the failure survives
-// being journaled and is reconstructed identically on replay.
+// being journaled and is reconstructed on replay. It is the error type every
+// replayed step failure takes: the message is preserved, but a step's original
+// concrete error type is not.
+//
+// Because of that, a workflow must not branch on an error's type or value —
+// errors.As or errors.Is against a custom type or sentinel passes on the live
+// run and fails on replay (where the error is always a *StepError), a
+// determinism bug as real as a diverging tag. Branch only on whether a step
+// errored; to steer control flow on why it failed, journal the reason as a value
+// inside the Do and branch on that value.
 type StepError struct {
 	Tag string
 	Msg string

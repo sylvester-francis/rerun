@@ -168,6 +168,14 @@ it returns the terminal error instead of a value.
 stable tag. A step's error is journaled too: a step that failed replays the
 *same* error rather than re-running.
 
+> **Errors replay by message, not by type.** On replay a step's failure comes
+> back as a `*rerun.StepError` carrying the original message — but *not* the
+> original concrete type. So inside a workflow, never branch on an error's type
+> or sentinel value (`errors.As` / `errors.Is` against your own error): the check
+> passes on the live run and fails on replay, a determinism bug. Branch only on
+> *whether* a step errored; to steer control flow on *why* it failed, return the
+> reason as a value from the `Do` and branch on that.
+
 **Retry** is built in — each attempt is its own journaled step, and the backoff
 uses the durable `Sleep`, so a crash mid-backoff resumes correctly:
 
@@ -320,7 +328,10 @@ if morning { ... }
 ```
 
 A divergent tag panics loudly at the exact position — a determinism bug fails
-fast instead of silently corrupting a run.
+fast instead of silently corrupting a run. The rule reaches errors too: a
+replayed step failure is a `*StepError` with the original message but not the
+original type, so branch on *whether* a step errored, never on an error's type or
+sentinel value.
 
 **2 · Idempotency.** `rerun` is at-least-once for side effects: a step repeats
 only if the process dies after its side effect runs but before its journal entry

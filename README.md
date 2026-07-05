@@ -237,7 +237,7 @@ if morning {
 
 The engine enforces this rather than hope for it: if a `Do` presents a tag that doesn't match the journal at that position, it **panics with the exact position and both tags** — a determinism bug fails loudly at the first divergence instead of quietly producing wrong results.
 
-> Errors are results too. A step that returns "card declined" on the first run reproduces that *same* error on replay — it does not re-run the charge hoping for a different answer.
+> Errors are results too. A step that returns "card declined" on the first run reproduces that *same* error on replay — it does not re-run the charge hoping for a different answer. But the replayed error is a `*StepError` carrying the message, **not the original type**: branch on *whether* a step failed, never on an error's type or sentinel (`errors.As`/`errors.Is`), and capture any why-it-failed decision as a journaled value.
 
 ## Patterns fall out of the primitive
 
@@ -419,6 +419,7 @@ Retries with durable backoff (`Retry`), per-step timeouts (`DoTimeout`), typed r
 
 - [`docs/using-rerun.md`](docs/using-rerun.md) — how to wire `rerun` into a real application: input/result, retries, timeouts, cancellation, signals, choosing a backend, and the rules you must follow.
 - [`docs/durable-execution.md`](docs/durable-execution.md) — a concept-to-code tour of durable execution and this codebase; the *why* behind the *how*.
+- [`docs/adr/`](docs/adr/) — architecture decision records: the *why* behind the key choices (journal as truth, one recovery path, park-not-fail, and more).
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`CHANGELOG.md`](CHANGELOG.md)
 - API reference on [pkg.go.dev](https://pkg.go.dev/github.com/sylvester-francis/rerun).
 
