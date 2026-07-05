@@ -66,7 +66,29 @@ func TestMyStore(t *testing.T) {
 
 Optionally implement `rerun.Signaler` for external-event support.
 
+## Proposing a change
+
+Substantial changes (a new backend, a change to the engine, semantics, or a public
+contract) start with an **Architecture Decision Record**, not a pull request:
+
+1. Copy an existing record in [`docs/adr/`](docs/adr/) to a new numbered file with
+   status *Proposed*, describing the problem, the options, and the decision.
+2. Open the ADR as a pull request. Once it is approved, implement it and open the
+   implementation pull request referencing the ADR.
+
+Obvious small fixes (typos, docs, a clear bug with an obvious fix) can skip the ADR
+and go straight to a focused pull request.
+
 ## Pull requests
 
-Keep them focused. Explain what changed and why, and confirm `make` is green.
-By contributing you agree your work is licensed under Apache-2.0.
+Keep them focused, and confirm `make` is green. A PR that changes more than **20
+files** is automatically blocked; split it into smaller PRs (an approved ADR can
+carry the plan across them). By contributing you agree your work is licensed under
+Apache-2.0.
+
+## Forks
+
+rerun is Apache 2.0, so you are free to fork and modify it. If your fork improves
+rerun, please send the improvement back as a pull request instead of letting it
+diverge. Upstreaming keeps everyone on one maintained line and gets your change
+reviewed and released. This is a request, not a license term.
